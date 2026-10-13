@@ -1,0 +1,24 @@
+# ── Core OCR & image processing ───────────────────────────────────────────────
+pytesseract>=0.3.10     # Tesseract Python wrapper
+opencv-python>=4.8.0    # Image preprocessing (deskew, denoise, threshold)
+Pillow>=10.0.0          # Image loading and manipulation
+numpy>=1.24.0           # Array ops for OpenCV
+
+# ── PDF support ───────────────────────────────────────────────────────────────
+pdf2image>=1.16.3       # PDF → PIL Images (requires poppler system package)
+
+# ── Ollama client ─────────────────────────────────────────────────────────────
+# No extra package needed — uses Python's built-in urllib.
+# Just install Ollama itself: https://ollama.com/download
+# Then pull a model:
+#   ollama pull qwen2.5:7b       (recommended — good Arabic support, ~5GB)
+#   ollama pull mistral           (English-focused, ~4GB)
+#   ollama pull llama3.2-vision   (supports images too, ~8GB)
+
+# ── Optional: Marwan-Ghazal OCR repo deps (national ID) ──────────────────────
+# Install these only if you cloned the repo and set NATIONAL_ID_OCR_PATH:
+# pytesseract is already above; the repo also needs:
+# imutils>=0.5.4
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+python-multipart>=0.0.9

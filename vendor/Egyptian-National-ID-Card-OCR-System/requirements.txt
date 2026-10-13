@@ -1,0 +1,25 @@
+# Egyptian National ID Card OCR Recognition System
+# Requirements file for all necessary dependencies
+
+# Web Framework and API
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+
+# Computer Vision and Image Processing
+opencv-python==4.8.1.78
+Pillow==10.1.0
+scikit-image==0.22.0
+imutils==0.5.4
+
+# OCR (Optical Character Recognition)
+pytesseract==0.3.10
+
+# Scientific Computing and Data Processing
+numpy==1.25.2
+
+# HTTP and Web Utilities
+python-multipart==0.0.6
+
+# Development and Testing (Optional)
+pytest==7.4.3
+pytest-asyncio==0.21.1
