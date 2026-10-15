@@ -272,7 +272,7 @@ def _ocr_back_variants(back_path: str) -> list[str]:
     page = pages[0]
 
 
-    pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+    # pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
 
 
