@@ -38,19 +38,34 @@ from PIL import Image, ImageOps
 
 
 
-# Windows fallback. On Railway/Linux, locate Tesseract automatically.
+
+# Tesseract configuration: Windows and Railway/Linux
+
 DEFAULT_TESSERACT_PATH = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
 TESSERACT_CMD = (
     os.environ.get("TESSERACT_CMD")
     or shutil.which("tesseract")
-    or DEFAULT_TESSERACT_PATH
 )
+
+# Use the Windows fallback only on Windows.
+if not TESSERACT_CMD and os.name == "nt":
+    if os.path.isfile(DEFAULT_TESSERACT_PATH):
+        TESSERACT_CMD = DEFAULT_TESSERACT_PATH
+
+if not TESSERACT_CMD or not os.path.isfile(TESSERACT_CMD):
+    raise RuntimeError(
+        f"Tesseract executable not found. "
+        f"OS={os.name}, TESSERACT_CMD={TESSERACT_CMD!r}"
+    )
 
 pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
 
 print(f"[OCR] Tesseract executable: {TESSERACT_CMD}")
-print(f"[OCR] TESSDATA_PREFIX: {os.environ.get('TESSDATA_PREFIX', '(not set)')}")
+print(
+    f"[OCR] TESSDATA_PREFIX: "
+    f"{os.environ.get('TESSDATA_PREFIX', '(not set)')}"
+)
 
 
 
