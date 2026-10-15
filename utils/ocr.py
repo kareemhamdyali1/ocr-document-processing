@@ -441,7 +441,29 @@ def preprocess_id_card(
 
 
 def _available_languages() -> set:
-    """Return installed Tesseract languages and log discovery failures."""
+    """Return installed Tesseract languages using the configured executable."""
+    import os
+    import shutil
+    import pytesseract
+
+    configured_cmd = (
+        os.environ.get("TESSERACT_CMD")
+        or shutil.which("tesseract")
+    )
+
+    if configured_cmd:
+        pytesseract.pytesseract.tesseract_cmd = configured_cmd
+
+    print(
+        f"[OCR DEBUG] Executable before language check: "
+        f"{pytesseract.pytesseract.tesseract_cmd}"
+    )
+
+    print(
+        f"[OCR DEBUG] TESSDATA_PREFIX: "
+        f"{os.environ.get('TESSDATA_PREFIX', '(not set)')}"
+    )
+
     try:
         languages = set(pytesseract.get_languages(config=""))
         print(f"[OCR] Available Tesseract languages: {sorted(languages)}")
@@ -452,8 +474,6 @@ def _available_languages() -> set:
             f"{type(exc).__name__}: {exc}"
         )
         return set()
-
-
 
 
 def _select_language(requested_language: str) -> str:
