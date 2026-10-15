@@ -155,6 +155,8 @@ def _extract_via_regex(text: str) -> dict:
             except ValueError:
                 pass
             break
+        else:
+            result["declared_net_salary"] = result["declared_gross_salary"] * 0.8 
 
     # Employment date — current job start: "currently employed by X from DD-Mon-YYYY"
     m = re.search(
