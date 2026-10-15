@@ -424,22 +424,19 @@ def preprocess_id_card(
 
 
 
+
 def _available_languages() -> set:
-
-    """Return installed Tesseract language packs."""
-
+    """Return installed Tesseract languages and log discovery failures."""
     try:
-
-        return set(
-
-            pytesseract.get_languages(config="")
-
+        languages = set(pytesseract.get_languages(config=""))
+        print(f"[OCR] Available Tesseract languages: {sorted(languages)}")
+        return languages
+    except Exception as exc:
+        print(
+            f"[OCR] Failed to detect Tesseract languages: "
+            f"{type(exc).__name__}: {exc}"
         )
-
-    except Exception:
-
         return set()
-
 
 
 
