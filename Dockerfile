@@ -22,9 +22,8 @@ COPY . .
 RUN python -c "import skimage; print('scikit-image OK')" \
     && which tesseract \
     && tesseract --version \
-    && tesseract --list-langs \
-    && find /usr/share -type f \( \
-        -name "ara.traineddata" -o -name "eng.traineddata" \
-    \)
+    && test -f /usr/share/tesseract-ocr/5/tessdata/ara.traineddata \
+    && test -f /usr/share/tesseract-ocr/5/tessdata/eng.traineddata \
+    && TESSDATA_PREFIX=/usr/share/tesseract-ocr/5/tessdata tesseract --list-langs
 
 CMD ["sh", "-c", "uvicorn api:app --host 0.0.0.0 --port ${PORT:-8080}"]
