@@ -141,22 +141,32 @@ def _extract_via_regex(text: str) -> dict:
                 break
 
     # Net salary — only set if explicitly mentioned and value > 100 (avoid OCR noise)
+    
+    # Net salary — use explicit value when available.
+    # Otherwise estimate 80% of gross only when gross is available.
     for pattern in [
         r"(?:monthly net salary of|net salary)[^\d]*([\d,،]+(?:\.\d+)?)",
-        r"(?:الراتب الصافي|الأجر الصافي|المرتب الصافي)[^\n]*?([\d,،]+(?:\.\d+)?)",
+        r"(?:الراتب الصافي|الأجر الصافي|المرتب الصافي)[^\d]*([\d,،]+(?:\.\d+)?)",
     ]:
         m = re.search(pattern, text, re.IGNORECASE)
         if m:
             raw = m.group(1).replace(",", "").replace("،", "")
             try:
                 val = float(raw)
-                if val > 100:   # ignore OCR noise like "1.0"
+                if val > 100:
                     result["declared_net_salary"] = val
             except ValueError:
                 pass
-            break
-        else:
-            result["declared_net_salary"] = result["declared_gross_salary"] * 0.8 
+
+            if result["declared_net_salary"] is not None:
+                break
+
+    # Fallback estimate only if an explicit net salary was not found.
+    if result["declared_net_salary"] is None:
+        gross = result.get("declared_gross_salary")
+        if gross is not None:
+            result["declared_net_salary"] = round(float(gross) * 0.80, 2)
+
 
     # Employment date — current job start: "currently employed by X from DD-Mon-YYYY"
     m = re.search(
