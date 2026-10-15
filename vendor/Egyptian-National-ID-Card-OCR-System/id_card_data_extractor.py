@@ -28,9 +28,9 @@ import pytesseract
 import pob
 import gender as gender_detector
 
-# Configure Tesseract OCR paths (should be moved to config file)
-pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-os.environ["TESSDATA_PREFIX"] = r"C:\Program Files\Tesseract-OCR\tessdata"
+# # Configure Tesseract OCR paths (should be moved to config file)
+# pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+# os.environ["TESSDATA_PREFIX"] = r"C:\Program Files\Tesseract-OCR\tessdata"
 
 # Global variables to store extracted ID card data
 # TODO: Consider using a class-based approach instead of global variables
