@@ -6,7 +6,7 @@ import os
 
 import re
 
-
+import shutil
 
 import cv2
 
@@ -38,21 +38,19 @@ from PIL import Image, ImageOps
 
 
 
-DEFAULT_TESSERACT_PATH = (
+# Windows fallback. On Railway/Linux, locate Tesseract automatically.
+DEFAULT_TESSERACT_PATH = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
-    r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-
+TESSERACT_CMD = (
+    os.environ.get("TESSERACT_CMD")
+    or shutil.which("tesseract")
+    or DEFAULT_TESSERACT_PATH
 )
 
+pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
 
-
-pytesseract.pytesseract.tesseract_cmd = os.environ.get(
-
-    "TESSERACT_CMD",
-
-    r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-
-)
+print(f"[OCR] Tesseract executable: {TESSERACT_CMD}")
+print(f"[OCR] TESSDATA_PREFIX: {os.environ.get('TESSDATA_PREFIX', '(not set)')}")
 
 
 
