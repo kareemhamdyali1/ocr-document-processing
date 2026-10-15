@@ -1,6 +1,6 @@
 # ── Core OCR & image processing ───────────────────────────────────────────────
 pytesseract>=0.3.10     # Tesseract Python wrapper
-opencv-python>=4.8.0    # Image preprocessing (deskew, denoise, threshold)
+opencv-python-headless==4.12.0.88   # Image preprocessing (deskew, denoise, threshold)
 Pillow>=10.0.0          # Image loading and manipulation
 numpy>=1.24.0           # Array ops for OpenCV
 
