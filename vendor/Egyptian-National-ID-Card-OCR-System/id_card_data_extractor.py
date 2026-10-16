@@ -96,7 +96,8 @@ def extract_front_side_data(front_image_path):
     address_region = binary_image[300:450, 400:1000]
 
     # ID number region (right side, lower area)
-    id_number_region = binary_image[500:560, 400:1000]
+    h, w = binary_image.shape[:2]
+    id_number_region = binary_image[int(h*0.62):int(h*0.80), int(w*0.0):int(w*1.0)]
 
     # Perform OCR on extracted regions
     try:
@@ -105,10 +106,14 @@ def extract_front_side_data(front_image_path):
         extracted_address = image_to_string(address_region, lang="ara")
 
         # Extract ID number using Arabic number recognition
-        raw_id_number = image_to_string(id_number_region, lang="ara_number")
+        raw_id_number = image_to_string(id_number_region, lang="ara_number+ara+eng", 
+                                 config="--oem 1 --psm 7")
         extracted_id_number = ''.join(raw_id_number.split())  # Remove whitespace
-
         print(f"Extracted ID Number: {extracted_id_number}")
+        print(f"    [DEBUG] Raw ID OCR: {repr(raw_id_number[:100])}")
+        print(f"    [DEBUG] Image shape: {binary_image.shape}")
+
+        
 
     except Exception as ocr_error:
         print(f"[Warning] OCR extraction failed: {ocr_error}")
