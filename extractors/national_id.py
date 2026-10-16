@@ -74,6 +74,36 @@ def _clean_text(value: Any) -> str:
     return value.strip(" :-|،؛,.\"'«»")
 
 
+def _find_national_id(texts: Any) -> str | None:
+    """Find a plausible Egyptian 14-digit ID without merging unrelated OCR fields.
+
+    Search each OCR line independently. This tolerates spaces or common OCR
+    separators between digits, but deliberately does not remove whitespace from
+    the entire document (which could concatenate unrelated numbers).
+    """
+    if isinstance(texts, str):
+        texts = [texts]
+    # A separator is permitted between digits on the same OCR line only.
+    candidate_pattern = re.compile(
+        r"(?<![0-9])[23](?:[ \t.\-_/|:،؛]*[0-9]){13}(?![0-9])"
+    )
+    seen = set()
+    for text in texts or []:
+        normalized = _normalize_digits(text)
+        normalized = re.sub(DIRECTIONAL_MARKS, "", normalized)
+        for line in normalized.splitlines():
+            for match in candidate_pattern.finditer(line):
+                candidate = re.sub(r"\D", "", match.group(0))
+                if len(candidate) != 14 or candidate in seen:
+                    continue
+                seen.add(candidate)
+                decoded = _parse_id_number(candidate)
+                # A valid embedded birth date is a useful low-cost sanity check.
+                if decoded.get("date_of_birth"):
+                    return candidate
+    return None
+
+
 def _parse_id_number(nid: str) -> dict:
     """Decode DOB, age, gender and governorate only from a valid 14-digit ID."""
     nid = re.sub(r"\D", "", _normalize_digits(nid))
@@ -325,15 +355,15 @@ def _extract_via_repo(front_path: str, back_path: str) -> dict:
         "id_expiry_date": None,
     }
     # Fix for the previous NameError: define the match before using it.
-    validated = re.search(r"digits=['\"](\d{14})['\"].*?confidence=1\.00", repo_output, re.S)
-    if validated:
-        data["national_id"] = validated.group(1)
+    # Normalize the repository's returned field first; OCR may insert spaces.
+    if not _is_missing(data.get("national_id")):
+        repo_nid = _find_national_id(str(data["national_id"]))
+        data["national_id"] = repo_nid or data["national_id"]
 
-    # Also search any captured repository output for a 14-digit ID.
+    # Search captured repository output line-by-line; never concatenate the
+    # whole output because separate fields can accidentally form 14 digits.
     if _is_missing(data.get("national_id")):
-        found = re.search(r"(?<!\d)[23]\d{13}(?!\d)", _normalize_digits(repo_output))
-        if found:
-            data["national_id"] = found.group(0)
+        data["national_id"] = _find_national_id(repo_output)
 
     for key, value in list(data.items()):
         if isinstance(value, str):
@@ -414,9 +444,11 @@ def _extract_via_tesseract(front_path: str, back_path: str) -> dict:
     all_back_text = [back_text] + back_variants
     full_text = "\n".join([front_text, *all_back_text])
 
-    # Only accept a 14-digit number whose first digit is a valid Egyptian ID century digit.
-    id_matches = re.findall(r"(?<!\d)[23]\d{13}(?!\d)", re.sub(r"\s+", "", full_text))
-    nid = id_matches[0] if id_matches else None
+    # Search OCR results line-by-line and tolerate spaces between digits.
+    # Do not remove all whitespace from the entire document: that can merge
+    # separate dates/account numbers into a false 14-digit ID.
+    nid = _find_national_id([front_text, *all_back_text])
+    print(f"    [national_id] Tesseract ID candidate found: {bool(nid)}")
     name = _extract_labeled_field(front_text, [r"الاسم\s+رباعي(?:اً|ا)?", r"الاسم\s+بالكامل", r"الاسم", r"\bName\b"], 5, 70)
     address = _extract_labeled_field(front_text, [r"عنوان\s+الإقامة", r"عنوان\s+الاقامة", r"محل\s+الإقامة", r"محل\s+الاقامة", r"العنوان", r"\bAddress\b"], 5, 150)
     profession = _extract_profession(all_back_text)
