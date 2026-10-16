@@ -622,16 +622,16 @@ def _extract_expiry_date(texts: list) -> str | None:
 
 
 
+
 def _extract_expiry_with_qwen(back_path: str) -> str | None:
-    """Extract the date associated with 'البطاقة سارية حتى' only."""
+    """Read the expiry date using Qwen through the configured proxy."""
     import base64
     import io
-    import json
     import re
-    import urllib.request
     from datetime import date
     from pathlib import Path
     from PIL import Image
+    from utils.ollama_client import ollama_generate
 
     image_path = Path("expiry_crop_enhanced.png")
     if not image_path.is_file():
@@ -645,60 +645,86 @@ def _extract_expiry_with_qwen(back_path: str) -> str | None:
             image.thumbnail((1400, 800))
             buffer = io.BytesIO()
             image.save(buffer, format="JPEG", quality=95)
-            encoded = base64.b64encode(
-                buffer.getvalue()
-            ).decode("ascii")
+            encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
 
-        prompts = [
-            (
-                "Transcribe all visible text exactly as printed. "
-                "Pay special attention to the Arabic phrase "
-                "'البطاقة سارية حتى' and the date immediately following it. "
-                "Do not guess or use any other date."
-            ),
-            (
-                "Inspect this close-up carefully. Find the Arabic label "
-                "'البطاقة سارية حتى'. Return only the date printed directly "
-                "next to that label, preserving its original day/month/year "
-                "order. Do not return any other date. If you cannot read it, "
-                "return unreadable. Never guess."
-            ),
-        ]
-
-        answers = []
-
-        for prompt in prompts:
-            payload = {
-                "model": "qwen2.5vl:3b",
-                "prompt": prompt,
-                "images": [encoded],
-                "stream": False,
-                "keep_alive": "2m",
-                "options": {
-                    "temperature": 0,
-                    "num_predict": 100,
-                    "num_ctx": 4096,
-                },
-            }
-
-            request = urllib.request.Request(
-                "http://127.0.0.1:11434/api/generate",
-                data=json.dumps(payload).encode("utf-8"),
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-
-            with urllib.request.urlopen(request, timeout=90) as response:
-                result = json.loads(response.read().decode("utf-8"))
-
-            answer = result.get("response", "").strip()
-            print(f"    [national_id] Qwen expiry attempt: {answer!r}")
-            answers.append(answer)
-
-        digit_map = str.maketrans(
-            "٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹",
-            "01234567890123456789",
+        prompt = (
+            "Inspect this Egyptian national ID back-side image. "
+            "Find the date immediately associated with the Arabic label "
+            "'البطاقة سارية حتى'. Return only JSON in this exact format: "
+            '{"expiry_date":"YYYY-MM-DD"} or {"expiry_date":null}. '
+            "Do not use the date of birth or another date. Never guess."
         )
+
+        payload = {
+            "model": os.getenv("OLLAMA_MODEL", "qwen2.5vl:3b").strip(),
+            "prompt": prompt,
+            "images": [encoded],
+            "stream": False,
+            "keep_alive": "2m",
+            "format": "json",
+            "options": {
+                "temperature": 0,
+                "num_predict": 100,
+                "num_ctx": 4096,
+            },
+        }
+
+        body = ollama_generate(payload, timeout=180)
+        raw = body.get("response", "").strip()
+
+        if not raw:
+            print("    [national_id] Qwen returned an empty expiry response")
+            return None
+
+        try:
+            parsed = json.loads(raw)
+            candidate = str(parsed.get("expiry_date") or "").strip()
+        except (json.JSONDecodeError, AttributeError):
+            candidate = raw
+
+        # Accept only an unambiguous ISO date or a clear numeric date.
+        candidate = candidate.translate(
+            str.maketrans(
+                "٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹",
+                "01234567890123456789",
+            )
+        )
+
+        iso_match = re.search(r"(?<!\d)(20\d{2})-(\d{1,2})-(\d{1,2})(?!\d)", candidate)
+        if iso_match:
+            try:
+                parsed_date = date(*map(int, iso_match.groups()))
+                if date.today() <= parsed_date <= date.today().replace(
+                    year=date.today().year + 20
+                ):
+                    return parsed_date.isoformat()
+            except ValueError:
+                pass
+
+        numeric_match = re.search(
+            r"(?<!\d)(\d{1,2})[/.-](\d{1,2})[/.-](20\d{2})(?!\d)",
+            candidate,
+        )
+        if numeric_match:
+            day, month, year = map(int, numeric_match.groups())
+            try:
+                parsed_date = date(year, month, day)
+                if date.today() <= parsed_date <= date.today().replace(
+                    year=date.today().year + 20
+                ):
+                    return parsed_date.isoformat()
+            except ValueError:
+                pass
+
+        print("    [national_id] Qwen expiry response was not a valid future date")
+        return None
+
+    except Exception as exc:
+        print(
+            "    [national_id] Qwen expiry extraction failed: "
+            f"{type(exc).__name__}: {exc}"
+        )
+        return None
 
         def parse_date(text: str, require_label: bool) -> str | None:
             text = text.translate(digit_map)
@@ -1473,188 +1499,65 @@ def _extract_via_tesseract(
 
 
 
+
 def _extract_via_ollama_vision(
-
     front_path: str,
-
     back_path: str,
-
 ) -> dict:
+    """Extract ID fields using the configured remote/local vision model."""
+    import base64
+    from utils.ollama_client import ollama_generate
 
-    def encode(path):
-
+    def encode(path: str) -> str:
         with open(path, "rb") as handle:
-
-            return base64.b64encode(
-
-                handle.read()
-
-            ).decode("utf-8")
-
-
+            return base64.b64encode(handle.read()).decode("ascii")
 
     prompt = """
-        These are the front and back sides of an Egyptian national ID card.
-
-        Extract only information visibly supported by the images.
-
-        Return ONLY a valid JSON object with these keys:
-        full_name, national_id, date_of_birth, governorate, address,
-        gender, marital_status_on_id, profession_on_id, id_expiry_date.
-
-        Requirements:
-        - Use Arabic for Arabic text.
-        - Return dates as YYYY-MM-DD.
-        - Return null for unreadable or absent fields.
-        - Do not invent or complete missing words.
-        - For address: read ALL lines of the address completely including
-        building number, compound name, district and governorate.
-        Preserve Arabic-Indic digits (٣٥٩ etc.) as-is.
-        - For profession_on_id: read the COMPLETE qualification text
-        including specialization (تخصص) if visible on the back side.
-        - For id_expiry_date: this is the FUTURE expiry date printed on
-        the back side, NOT the date of birth or issue date.
-        It should be a year after 2025.
-        - The national ID must contain exactly 14 digits.
-        """
-
-
-    images = [
-
-        encode(front_path),
-
-        encode(back_path),
-
-    ]
-
-
-
-    for model in ("llava", "llama3.2-vision"):
-
-        payload = json.dumps({
-
-            "model": model,
-
-            "prompt": prompt,
-
-            "images": images,
-
-            "stream": False,
-
-            "options": {
-
-                "temperature": 0.0,
-
-            },
-
-        }).encode("utf-8")
-
-
-
-        request = urllib.request.Request(
-
-            "http://localhost:11434/api/generate",
-
-            data=payload,
-
-            headers={
-
-                "Content-Type": "application/json",
-
-            },
-
-            method="POST",
-
-        )
-
-
-
-        try:
-
-            with urllib.request.urlopen(
-
-                request,
-
-                timeout=300,
-
-            ) as response:
-
-                body = json.loads(
-
-                    response.read().decode("utf-8")
-
-                )
-
-
-
-            raw = body.get("response", "").strip()
-
-
-
-            raw = re.sub(
-
-                r"^```(?:json)?\s*",
-
-                "",
-
-                raw,
-
-                flags=re.IGNORECASE,
-
-            )
-
-
-
-            raw = re.sub(r"\s*```$", "", raw)
-
-
-
-            result = json.loads(raw)
-
-
-
-            if not isinstance(result, dict):
-
-                raise ValueError(
-
-                    "Ollama did not return a JSON object"
-
-                )
-
-
-
-            print(
-
-                f"    [national_id] Ollama vision "
-
-                f"({model}) succeeded"
-
-            )
-
-
-
-            return result
-
-
-
-        except Exception as exc:
-
-            print(
-
-                f"    [national_id] Ollama vision "
-
-                f"{model} failed: {type(exc).__name__}: {exc}"
-
-            )
-
-
-
-    raise RuntimeError(
-
-        "All Ollama vision models failed"
-
-    )
-
+You are extracting fields from the front and back of an Egyptian national ID.
+Return only a JSON object with these keys:
+full_name, national_id, date_of_birth, governorate, address, gender,
+marital_status_on_id, profession_on_id, id_expiry_date.
+
+Rules:
+- Use Arabic for Arabic text.
+- Dates must be YYYY-MM-DD.
+- Return null for unreadable or absent values.
+- Never guess or invent information.
+- national_id must contain exactly 14 digits.
+- id_expiry_date is the future expiry date printed on the back,
+  not date of birth or issue date.
+- Read the full visible address and qualification when possible.
+"""
+
+    payload = {
+        "model": os.getenv("OLLAMA_MODEL", "qwen2.5vl:3b").strip(),
+        "prompt": prompt,
+        "images": [encode(front_path), encode(back_path)],
+        "stream": False,
+        "format": "json",
+        "keep_alive": "2m",
+        "options": {
+            "temperature": 0,
+            "num_predict": 700,
+            "num_ctx": 4096,
+        },
+    }
+
+    body = ollama_generate(payload, timeout=300)
+    raw = body.get("response", "").strip()
+
+    if not raw:
+        raise ValueError("Qwen returned an empty vision response")
+
+    raw = re.sub(r"^\s*```(?:json)?\s*", "", raw, flags=re.IGNORECASE)
+    raw = re.sub(r"\s*```\s*$", "", raw).strip()
+    result = json.loads(raw)
+
+    if not isinstance(result, dict):
+        raise ValueError("Qwen did not return a JSON object")
+
+    print("    [national_id] Qwen vision extraction succeeded")
+    return result
 
 
 
