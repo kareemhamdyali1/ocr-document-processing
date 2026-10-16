@@ -440,6 +440,10 @@ def _extract_via_tesseract(front_path: str, back_path: str) -> dict:
     back_page = _read_pages(back_path)[0]
     front_text = _normalize_digits(ocr_id_card(front_page, lang="ara+eng") or "")
     back_text = _normalize_digits(ocr_id_card(back_page, lang="ara+eng") or "")
+
+
+    print("    [DEBUG] FRONT TEXT:")
+    print(repr(front_text[:500]))
     back_variants = _ocr_back_variants(back_path)
     all_back_text = [back_text] + back_variants
     full_text = "\n".join([front_text, *all_back_text])
