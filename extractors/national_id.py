@@ -75,34 +75,34 @@ def _clean_text(value: Any) -> str:
 
 
 def _find_national_id(texts: Any) -> str | None:
-    """Find a plausible Egyptian 14-digit ID without merging unrelated OCR fields.
-
-    Search each OCR line independently. This tolerates spaces or common OCR
-    separators between digits, but deliberately does not remove whitespace from
-    the entire document (which could concatenate unrelated numbers).
-    """
     if isinstance(texts, str):
         texts = [texts]
-    # A separator is permitted between digits on the same OCR line only.
     candidate_pattern = re.compile(
         r"(?<![0-9])[23](?:[ \t.\-_/|:،؛]*[0-9]){13}(?![0-9])"
     )
     seen = set()
-    for text in texts or []:
-        normalized = _normalize_digits(text)
-        normalized = re.sub(DIRECTIONAL_MARKS, "", normalized)
-        for line in normalized.splitlines():
-            for match in candidate_pattern.finditer(line):
+
+    def _search_line(line: str) -> str | None:
+        # جرب الـ line عادي وجرب معكوسه (RTL OCR issue)
+        for attempt in [line, line[::-1]]:
+            for match in candidate_pattern.finditer(attempt):
                 candidate = re.sub(r"\D", "", match.group(0))
                 if len(candidate) != 14 or candidate in seen:
                     continue
                 seen.add(candidate)
                 decoded = _parse_id_number(candidate)
-                # A valid embedded birth date is a useful low-cost sanity check.
                 if decoded.get("date_of_birth"):
                     return candidate
-    return None
+        return None
 
+    for text in texts or []:
+        normalized = _normalize_digits(text)
+        normalized = re.sub(DIRECTIONAL_MARKS, "", normalized)
+        for line in normalized.splitlines():
+            result = _search_line(line)
+            if result:
+                return result
+    return None
 
 def _parse_id_number(nid: str) -> dict:
     """Decode DOB, age, gender and governorate only from a valid 14-digit ID."""
