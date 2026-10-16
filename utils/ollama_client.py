@@ -1,5 +1,5 @@
 
-"""Ollama client supporting local Ollama and authenticated remote proxy."""
+"""Ollama client for local Ollama or an authenticated remote proxy."""
 
 import json
 import os
@@ -30,6 +30,58 @@ def _headers() -> dict:
     return headers
 
 
+def ollama_generate(payload: dict, timeout: int = 240) -> dict:
+    """Send a raw /api/generate payload to the configured Ollama service."""
+    if not isinstance(payload, dict):
+        raise ValueError("Payload must be a dictionary")
+
+    if timeout <= 0:
+        raise ValueError("Timeout must be positive")
+
+    request = urllib.request.Request(
+        f"{_base_url()}/api/generate",
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers=_headers(),
+        method="POST",
+    )
+
+    start = time.monotonic()
+
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read().decode("utf-8", errors="replace")
+
+    except urllib.error.HTTPError as exc:
+        details = exc.read().decode("utf-8", errors="replace")[:500]
+        raise RuntimeError(
+            f"Ollama HTTP {exc.code}: {details}"
+        ) from exc
+
+    except (
+        urllib.error.URLError,
+        TimeoutError,
+        socket.timeout,
+        OSError,
+    ) as exc:
+        elapsed = time.monotonic() - start
+        raise RuntimeError(
+            f"Ollama request failed after {elapsed:.1f}s: {exc}"
+        ) from exc
+
+    try:
+        body = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("Ollama returned invalid API JSON") from exc
+
+    if not isinstance(body, dict):
+        raise RuntimeError("Ollama response must be a JSON object")
+
+    if body.get("error"):
+        raise RuntimeError(f"Ollama API error: {body['error']}")
+
+    return body
+
+
 def _extract_json_object(text: str) -> dict:
     cleaned = re.sub(
         r"^\s*```(?:json)?\s*",
@@ -43,13 +95,13 @@ def _extract_json_object(text: str) -> dict:
         obj = json.loads(cleaned)
     except json.JSONDecodeError:
         decoder = json.JSONDecoder()
-        pos = cleaned.find("{")
+        start = cleaned.find("{")
 
-        if pos < 0:
+        if start < 0:
             raise ValueError("Ollama response contains no JSON object")
 
         try:
-            obj, _ = decoder.raw_decode(cleaned[pos:])
+            obj, _ = decoder.raw_decode(cleaned[start:])
         except json.JSONDecodeError as exc:
             raise ValueError(
                 "Ollama returned malformed or incomplete JSON"
@@ -69,116 +121,53 @@ def ollama_extract(
     if not isinstance(prompt, str) or not prompt.strip():
         raise ValueError("Prompt must be non-empty")
 
-    if timeout <= 0:
-        raise ValueError("Timeout must be positive")
-
-    # Railway can override old model arguments with the deployed model.
-    effective_model = os.getenv("OLLAMA_MODEL", "").strip()
-    effective_model = effective_model or model or DEFAULT_MODEL
+    effective_model = (
+        os.getenv("OLLAMA_MODEL", "").strip()
+        or model
+        or DEFAULT_MODEL
+    )
 
     payload = {
         "model": effective_model,
         "prompt": prompt,
         "stream": False,
         "format": "json",
-        "keep_alive": "10m",
+        "keep_alive": "2m",
         "options": {
             "temperature": 0,
             "num_predict": 1200,
         },
     }
 
-    url = f"{_base_url()}/api/generate"
-
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(
-            payload,
-            ensure_ascii=False,
-        ).encode("utf-8"),
-        headers=_headers(),
-        method="POST",
-    )
-
     start = time.monotonic()
-
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as response:
-            raw = response.read().decode(
-                "utf-8",
-                errors="replace",
-            )
-
-    except urllib.error.HTTPError as exc:
-        details = exc.read().decode(
-            "utf-8",
-            errors="replace",
-        )[:500]
-        raise RuntimeError(
-            f"Ollama HTTP {exc.code}: {details}"
-        ) from exc
-
-    except (
-        urllib.error.URLError,
-        TimeoutError,
-        socket.timeout,
-        OSError,
-    ) as exc:
-        elapsed = time.monotonic() - start
-        raise RuntimeError(
-            f"Ollama request failed after {elapsed:.1f}s: {exc}"
-        ) from exc
-
+    body = ollama_generate(payload, timeout=timeout)
     elapsed = time.monotonic() - start
 
-    try:
-        body = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(
-            "Ollama returned invalid API JSON"
-        ) from exc
-
-    if not isinstance(body, dict):
-        raise RuntimeError(
-            "Ollama API response must be a JSON object"
-        )
-
-    if body.get("error"):
-        raise RuntimeError(
-            f"Ollama API error: {body['error']}"
-        )
-
     answer = body.get("response")
-
     if not isinstance(answer, str) or not answer.strip():
         raise ValueError("Ollama returned an empty response")
 
     print(
         f"    [ollama] Model={effective_model}; "
-        f"completed in {elapsed:.1f}s; "
-        f"output chars={len(answer)}"
+        f"completed in {elapsed:.1f}s; output chars={len(answer)}"
     )
 
     return _extract_json_object(answer)
 
 
 def is_ollama_running() -> bool:
-    # The temporary proxy exposes /health, not /api/tags.
+    """Check the remote proxy health or local Ollama tags endpoint."""
     base_url = _base_url()
+    remote = bool(os.getenv("OLLAMA_BASE_URL", "").strip())
 
-    if os.getenv("OLLAMA_BASE_URL", "").strip():
-        url = f"{base_url}/health"
-    else:
-        url = f"{base_url}/api/tags"
+    url = f"{base_url}/health" if remote else f"{base_url}/api/tags"
 
-    req = urllib.request.Request(
-        url,
-        headers=_headers(),
-        method="GET",
-    )
+    # The proxy's /health endpoint does not require authentication.
+    headers = {} if remote else _headers()
+    request = urllib.request.Request(url, headers=headers, method="GET")
 
     try:
-        with urllib.request.urlopen(req, timeout=10) as response:
+        with urllib.request.urlopen(request, timeout=10) as response:
             return response.status == 200
     except (
         urllib.error.HTTPError,
