@@ -932,13 +932,16 @@ def _extract_via_repo(front_path: str, back_path: str) -> dict:
 
 
     if not data.get("national_id"):
-
-        found = re.search(
-
-            r"Extracted ID Number:\s*(\d{14})",
-
-            output,
-
+        print(
+            "    [national_id] Repo ID extraction failed; "
+            "other fields may still be available"
+        )
+        print(
+            "    [national_id] Repo field availability:",
+            {
+                key: bool(value)
+                for key, value in data.items()
+            }
         )
 
 
@@ -1648,10 +1651,17 @@ def extract(front_path: str, back_path: str) -> dict:
 
     # Supplement missing fields with Tesseract even when the repository succeeds.
     # Do not overwrite existing non-empty values blindly.
-    if repo_succeeded and any(_is_missing(data.get(k)) for k in (
-        "full_name", "address", "profession_on_id", "id_expiry_date",
-        "marital_status_on_id",
-    )):
+    if repo_succeeded and any(
+        _is_missing(data.get(k))
+        for k in (
+            "national_id",
+            "full_name",
+            "address",
+            "profession_on_id",
+            "id_expiry_date",
+            "marital_status_on_id",
+        )
+    ):
         try:
             supplemental = _extract_via_tesseract(front_path, back_path)
             for key, value in supplemental.items():
