@@ -169,7 +169,7 @@ def _merge(result, candidate):
     return result
 
 
-def extract(path: str, ollama_model: str = 'mistral:latest') -> dict:
+def extract(path: str, ollama_model: str = "qwen2.5vl:3b") -> dict:
     pages = load_document(path)
     text = ocr_pages(pages, lang='ara+eng')
     # debug_path = Path('iscore_ocr_debug.txt')
