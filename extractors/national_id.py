@@ -30,7 +30,6 @@ NATIONAL_ID_OCR_PATH = os.getenv(
 )
 SAVE_DEBUG_CROPS = os.getenv("NATIONAL_ID_DEBUG_CROPS", "0") == "1"
 
-# Coordinates on a normalized 1000 x 630 front-card image: y1, y2, x1, x2.
 NAME_CROP = (150, 290, 400, 1000)
 ADDRESS_CROP = (290, 450, 400, 1000)
 
@@ -104,8 +103,8 @@ def _find_national_id(texts: Any) -> str | None:
                 return result
     return None
 
+
 def _parse_id_number(nid: str) -> dict:
-    """Decode DOB, age, gender and governorate only from a valid 14-digit ID."""
     nid = re.sub(r"\D", "", _normalize_digits(nid))
     if not re.fullmatch(r"[23]\d{13}", nid):
         return {}
@@ -149,15 +148,43 @@ def _to_gray_image(page):
     return cv2.cvtColor(arr, cv2.COLOR_BGR2GRAY)
 
 
+def _deskew_and_orient(gray):
+    """Fix rotation using Tesseract OSD."""
+    import cv2
+    import pytesseract
+    import numpy as np
+
+    if max(gray.shape[:2]) < 1000:
+        gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+
+    try:
+        osd = pytesseract.image_to_osd(gray, config="--psm 0 -c min_characters_to_try=5")
+        match = re.search(r"Rotate:\s*(\d+)", osd)
+        if match:
+            angle = int(match.group(1))
+            if angle != 0:
+                print(f"    [national_id] Auto-rotating image by {angle} degrees")
+                h, w = gray.shape[:2]
+                center = (w // 2, h // 2)
+                matrix = cv2.getRotationMatrix2D(center, -angle, 1.0)
+                gray = cv2.warpAffine(gray, matrix, (w, h),
+                                       flags=cv2.INTER_CUBIC,
+                                       borderMode=cv2.BORDER_REPLICATE)
+    except Exception as exc:
+        print(f"    [national_id] OSD skipped: {exc}")
+
+    return gray
+
+
 def _tesseract_text(image, lang="ara+eng", psm=6) -> str:
     import pytesseract
     return pytesseract.image_to_string(image, lang=lang, config=f"--oem 1 --psm {psm}") or ""
 
 
 def _ocr_back_variants(back_path: str) -> list[str]:
-    """Run multiple OCR passes against the reverse side."""
     import cv2
     gray = _to_gray_image(_read_pages(back_path)[0])
+    gray = _deskew_and_orient(gray)
     if max(gray.shape[:2]) < 1800:
         gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
     variants = [gray]
@@ -204,7 +231,6 @@ def _extract_profession(texts: list[str]) -> str | None:
             match = re.search(label_pattern + r"\s*[:：\-]?\s*(.*)", line, re.IGNORECASE)
             if not match and not re.match(r"حاصل\s*على", line):
                 continue
-            # Use the text after the label, not the label itself.
             first = _clean_text(match.group(1) if match else line)
             pieces = [first] if len(first) >= 3 else []
             for nxt in lines[i + 1:i + 5]:
@@ -219,22 +245,18 @@ def _extract_profession(texts: list[str]) -> str | None:
                 candidates.append(candidate)
     if not candidates:
         return None
-    # Prefer a plausible, sufficiently informative candidate, without blindly taking an enormous noisy line.
     return max(candidates, key=lambda s: min(len(s), 180))[:180] or None
 
 
 def _parse_expiry_candidate(value: str) -> str | None:
-    """Parse a future expiry date conservatively; do not guess ambiguous formats."""
     value = _normalize_digits(value)
     value = re.sub(DIRECTIONAL_MARKS, "", value)
     candidates = []
-    # Explicit ISO YYYY-MM-DD.
     for m in re.finditer(r"(?<!\d)(20\d{2})[-/.](\d{1,2})[-/.](\d{1,2})(?!\d)", value):
         try:
             candidates.append(date(int(m.group(1)), int(m.group(2)), int(m.group(3))))
         except ValueError:
             pass
-    # Egyptian card dates are usually DD/MM/YYYY. Do not interpret two-digit years.
     for m in re.finditer(r"(?<!\d)(\d{1,2})[-/.](\d{1,2})[-/.](20\d{2})(?!\d)", value):
         try:
             candidates.append(date(int(m.group(3)), int(m.group(2)), int(m.group(1))))
@@ -261,11 +283,9 @@ def _extract_expiry_date(texts: list[str]) -> str | None:
 
 
 def _extract_expiry_with_qwen(back_path: str) -> str | None:
-    """Use the configured Ollama client/proxy; never call localhost directly here."""
     from PIL import Image
     from utils.ollama_client import ollama_generate
 
-    # Prefer the actual uploaded back-side image. Avoid stale crop files from prior requests.
     with Image.open(back_path) as source:
         image = source.convert("RGB")
         image.thumbnail((1400, 1000))
@@ -303,7 +323,6 @@ def _extract_expiry_with_qwen(back_path: str) -> str | None:
         result = _parse_expiry_candidate(str(candidate))
         if result:
             return result
-        # Accept ISO only if strict validation succeeds.
         try:
             d = date.fromisoformat(str(candidate).strip())
             if date.today() <= d <= date(date.today().year + 20, 12, 31):
@@ -354,14 +373,10 @@ def _extract_via_repo(front_path: str, back_path: str) -> dict:
         "marital_status_on_id": getattr(mod, "extracted_marital_status", None),
         "id_expiry_date": None,
     }
-    # Fix for the previous NameError: define the match before using it.
-    # Normalize the repository's returned field first; OCR may insert spaces.
     if not _is_missing(data.get("national_id")):
         repo_nid = _find_national_id(str(data["national_id"]))
         data["national_id"] = repo_nid or data["national_id"]
 
-    # Search captured repository output line-by-line; never concatenate the
-    # whole output because separate fields can accidentally form 14 digits.
     if _is_missing(data.get("national_id")):
         data["national_id"] = _find_national_id(repo_output)
 
@@ -385,8 +400,8 @@ def _extract_name_address_from_image(front_path: str) -> dict:
     import pytesseract
     image = cv2.imread(str(front_path), cv2.IMREAD_GRAYSCALE)
     if image is None:
-        # Also support image formats loaded through the common document loader.
         image = _to_gray_image(_read_pages(front_path)[0])
+    image = _deskew_and_orient(image)
     image = cv2.resize(image, (1000, 630), interpolation=cv2.INTER_CUBIC)
     results = {"full_name": None, "address": None}
 
@@ -422,37 +437,56 @@ def _extract_name_address_from_image(front_path: str) -> dict:
                     candidate = " ".join(words)
                     if len(candidate) >= 5:
                         candidates.append(candidate)
-            # Prefer a 3- or 4-part Arabic name from one recognized line.
             if candidates:
                 results[field] = max(candidates, key=lambda s: (len(s.split()) in (3, 4), len(s)))
         else:
             candidates = [line for line in lines if len(line) >= 3 and len(re.findall(r"[\u0621-\u064a]", line)) >= 2]
             candidate = _clean_text(" ".join(candidates[:5]))
-            candidate = re.sub(r'^([0-9]{1,4})?\s*["\'“”`]+\s*', lambda m: ((m.group(1) or "") + " "), candidate).strip()
+            candidate = re.sub(r'^([0-9]{1,4})?\s*["\'""`]+\s*', lambda m: ((m.group(1) or "") + " "), candidate).strip()
             if len(candidate) >= 10 and len(re.findall(r"[\u0621-\u064a]", candidate)) >= 6:
                 results[field] = candidate
     return results
 
 
 def _extract_via_tesseract(front_path: str, back_path: str) -> dict:
-    from utils.ocr import ocr_id_card
+    import cv2
+    import pytesseract
+
     front_page = _read_pages(front_path)[0]
     back_page = _read_pages(back_path)[0]
-    front_text = _normalize_digits(ocr_id_card(front_page, lang="ara+eng") or "")
-    back_text = _normalize_digits(ocr_id_card(back_page, lang="ara+eng") or "")
 
+    # تصحيح الـ rotation قبل الـ OCR
+    front_gray = _deskew_and_orient(_to_gray_image(front_page))
+    back_gray = _deskew_and_orient(_to_gray_image(back_page))
 
-    print("    [DEBUG] FRONT TEXT:")
-    print(repr(front_text[:500]))
+    # تكبير الصورة لو صغيرة
+    import cv2 as _cv2
+    for attr_name in ("front_gray", "back_gray"):
+        img = locals()[attr_name]
+        if max(img.shape[:2]) < 1800:
+            locals()[attr_name]  # just reference
+
+    if max(front_gray.shape[:2]) < 1800:
+        front_gray = cv2.resize(front_gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+    if max(back_gray.shape[:2]) < 1800:
+        back_gray = cv2.resize(back_gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+
+    front_text = _normalize_digits(
+        pytesseract.image_to_string(front_gray, lang="ara+eng", config="--oem 1 --psm 6") or ""
+    )
+    back_text = _normalize_digits(
+        pytesseract.image_to_string(back_gray, lang="ara+eng", config="--oem 1 --psm 6") or ""
+    )
+
+    print(f"    [national_id] Front OCR sample: {repr(front_text[:150])}")
+
     back_variants = _ocr_back_variants(back_path)
     all_back_text = [back_text] + back_variants
     full_text = "\n".join([front_text, *all_back_text])
 
-    # Search OCR results line-by-line and tolerate spaces between digits.
-    # Do not remove all whitespace from the entire document: that can merge
-    # separate dates/account numbers into a false 14-digit ID.
     nid = _find_national_id([front_text, *all_back_text])
     print(f"    [national_id] Tesseract ID candidate found: {bool(nid)}")
+
     name = _extract_labeled_field(front_text, [r"الاسم\s+رباعي(?:اً|ا)?", r"الاسم\s+بالكامل", r"الاسم", r"\bName\b"], 5, 70)
     address = _extract_labeled_field(front_text, [r"عنوان\s+الإقامة", r"عنوان\s+الاقامة", r"محل\s+الإقامة", r"محل\s+الاقامة", r"العنوان", r"\bAddress\b"], 5, 150)
     profession = _extract_profession(all_back_text)
@@ -473,7 +507,6 @@ def _extract_via_tesseract(front_path: str, back_path: str) -> dict:
 
 
 def _extract_via_ollama_vision(front_path: str, back_path: str) -> dict:
-    """Optional complete vision fallback using the configured shared client."""
     from utils.ollama_client import ollama_generate
     def encode(path: str) -> str:
         with open(path, "rb") as f:
@@ -502,7 +535,6 @@ def _extract_via_ollama_vision(front_path: str, back_path: str) -> dict:
 
 
 def extract(front_path: str, back_path: str) -> dict:
-    """Extract ID fields, recover missing fields, and decode validated ID metadata."""
     front_path, back_path = str(front_path), str(back_path)
     repo_succeeded = False
     try:
@@ -515,7 +547,6 @@ def extract(front_path: str, back_path: str) -> dict:
         data = _extract_via_tesseract(front_path, back_path)
         print("    [national_id] Tesseract fallback done")
 
-    # Fill missing fields from Tesseract. Do not overwrite a non-empty repo result.
     if repo_succeeded and any(_is_missing(data.get(k)) for k in EXPECTED_KEYS):
         try:
             supplemental = _extract_via_tesseract(front_path, back_path)
@@ -529,7 +560,6 @@ def extract(front_path: str, back_path: str) -> dict:
     for key in EXPECTED_KEYS:
         data.setdefault(key, None)
 
-    # Front-side crop refinement. Only use a crop result if it is plausible and non-empty.
     try:
         refined = _extract_name_address_from_image(front_path)
         for field in ("full_name", "address"):
@@ -541,7 +571,6 @@ def extract(front_path: str, back_path: str) -> dict:
     except Exception as exc:
         print(f"    [national_id] Name/address refinement failed: {type(exc).__name__}: {exc}")
 
-    # Recover profession/expiry from all back-side OCR variants.
     back_texts = []
     try:
         back_texts = _ocr_back_variants(back_path)
@@ -567,7 +596,6 @@ def extract(front_path: str, back_path: str) -> dict:
             data["id_expiry_date"] = None
             print("    [national_id] Expiry date remains unreadable")
 
-    # Optional complete vision fallback, disabled by default.
     placeholders = {"arabic full name", "full name", "yyyy-mm-dd", "governorate in arabic", "full address", "profession text", "name", "address", "profession", "marital status", "unknown", "غير محدد"}
     def missing(value):
         return _is_missing(value) or (isinstance(value, str) and value.strip().lower() in placeholders)
@@ -582,7 +610,6 @@ def extract(front_path: str, back_path: str) -> dict:
         except Exception as exc:
             print(f"    [national_id] Ollama vision unavailable: {type(exc).__name__}: {exc}")
 
-    # Normalize/validate national ID. Metadata is derived only from a valid 14-digit number.
     nid_value = next((data.get(k) for k in ("national_id", "id_number", "ID Number", "id", "National ID", "national_id_number") if not _is_missing(data.get(k))), None)
     if nid_value is not None:
         nid = re.sub(r"\D", "", _normalize_digits(nid_value))
@@ -591,11 +618,9 @@ def extract(front_path: str, back_path: str) -> dict:
             decoded = _parse_id_number(nid)
             data.update(decoded)
         else:
-            # Preserve the candidate for debugging but don't derive metadata from it.
             data["national_id"] = nid or None
             print("    [national_id] Warning: extracted ID does not match the expected 14-digit format")
 
-    # Normalize ISO dates; leave unreadable original strings visible for debugging.
     for field in ("date_of_birth", "id_expiry_date"):
         value = data.get(field)
         if not isinstance(value, str) or not value.strip():
@@ -607,7 +632,6 @@ def extract(front_path: str, back_path: str) -> dict:
             parsed = _parse_expiry_candidate(value) if field == "id_expiry_date" else None
             data[field] = parsed or value
 
-    # Return a predictable schema without exposing internal repository-only fields.
     result = {key: data.get(key) for key in EXPECTED_KEYS}
     if "age_years" in data:
         result["age_years"] = data["age_years"]
@@ -615,7 +639,6 @@ def extract(front_path: str, back_path: str) -> dict:
 
 
 def extract_to_json(front_path: str, back_path: str, output_path: str = "national_id_result.json") -> dict:
-    """Run extraction and save available fields as UTF-8 JSON."""
     data = extract(front_path, back_path)
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
