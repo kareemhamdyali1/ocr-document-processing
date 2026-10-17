@@ -587,7 +587,9 @@ def _extract_name_address_from_image(front_path: str) -> dict:
         best_score, best_value, best_variant, best_psm = candidates[0]
 
         # Do not silently accept a weak candidate.
-        minimum_score = 9 if field == "full_name" else 10
+        # Reject weak Arabic OCR candidates rather than replacing
+        # existing extracted values with unreadable text.
+        minimum_score = 22 if field == "full_name" else 28
         if best_score >= minimum_score:
             results[field] = best_value
             print(
