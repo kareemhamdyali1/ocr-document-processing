@@ -444,57 +444,165 @@ def _extract_via_repo(front_path: str, back_path: str) -> dict:
     return data
 
 
+
 def _extract_name_address_from_image(front_path: str) -> dict:
     import cv2
     import pytesseract
+
     image = cv2.imread(str(front_path), cv2.IMREAD_GRAYSCALE)
     if image is None:
         image = _to_gray_image(_read_pages(front_path)[0])
+
     image = _deskew_and_orient(image)
     image = cv2.resize(image, (1000, 630), interpolation=cv2.INTER_CUBIC)
+
     results = {"full_name": None, "address": None}
 
-    for field, bounds in (("full_name", NAME_CROP), ("address", ADDRESS_CROP)):
+    def arabic_words(text: str) -> list[str]:
+        return re.findall(r"[\u0621-\u064a]+", text or "")
+
+    def normalize_arabic_candidate(text: str) -> str:
+        text = re.sub(DIRECTIONAL_MARKS, "", text or "")
+        text = re.sub(r"[^\u0621-\u064a\s]", " ", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        return text
+
+    def score_name(candidate: str) -> float:
+        words = arabic_words(candidate)
+        if not 2 <= len(words) <= 5:
+            return -100
+
+        score = min(len(words), 4) * 3
+        if len(words) == 4:
+            score += 5
+        if len(candidate) < 7:
+            score -= 4
+        if len(candidate) > 55:
+            score -= 5
+        if len(set(words)) < len(words):
+            score -= 2
+        return score
+
+    def score_address(candidate: str) -> float:
+        words = arabic_words(candidate)
+        if len(candidate) < 8 or len(words) < 3:
+            return -100
+
+        score = min(len(words), 12) * 2
+        if re.search(
+            r"الاسم|الرقم القومي|الجمهورية|وزارة الداخلية|"
+            r"البطاقة سارية|تاريخ الميلاد",
+            candidate,
+        ):
+            score -= 12
+        if len(candidate) > 180:
+            score -= 8
+        return score
+
+    for field, bounds in (
+        ("full_name", NAME_CROP),
+        ("address", ADDRESS_CROP),
+    ):
         y1, y2, x1, x2 = bounds
         if not (0 <= y1 < y2 <= 630 and 0 <= x1 < x2 <= 1000):
             raise ValueError(f"Invalid {field} crop: {bounds}")
+
         region = image[y1:y2, x1:x2]
-        enlarged = cv2.resize(region, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
+        if region.size == 0:
+            continue
+
+        enlarged = cv2.resize(
+            region, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC
+        )
+
+        # Improve contrast while preserving the original crop.
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        contrast = clahe.apply(enlarged)
+        threshold = cv2.threshold(
+            contrast, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
+        )[1]
+
         if SAVE_DEBUG_CROPS:
             cv2.imwrite(f"debug_{field}_crop.png", enlarged)
-        raw_results = []
-        for psm in (11, 6, 7):
-            try:
-                raw_results.append(pytesseract.image_to_string(enlarged, lang="ara", config=f"--oem 1 --psm {psm}") or "")
-            except Exception as exc:
-                print(f"    [national_id] {field} PSM {psm} failed: {type(exc).__name__}")
-        lines, seen = [], set()
-        for raw in raw_results:
-            for line in raw.splitlines():
-                cleaned = _clean_text(line)
-                if cleaned and cleaned not in seen:
-                    seen.add(cleaned)
-                    lines.append(cleaned)
+            cv2.imwrite(f"debug_{field}_contrast.png", contrast)
+            cv2.imwrite(f"debug_{field}_threshold.png", threshold)
 
-        if field == "full_name":
-            candidates = []
-            for line in lines:
-                if re.search(r"\d", line):
+        candidates = []
+        # Keep each OCR run separate: never combine lines from different
+        # PSM modes into a synthetic sentence.
+        for variant_name, variant in (
+            ("original", enlarged),
+            ("contrast", contrast),
+            ("threshold", threshold),
+        ):
+            for psm in (6, 7, 11):
+                try:
+                    raw = pytesseract.image_to_string(
+                        variant,
+                        lang="ara",
+                        config=f"--oem 1 --psm {psm}",
+                    ) or ""
+                except Exception as exc:
+                    print(
+                        f"    [national_id] {field} OCR failed "
+                        f"({variant_name}, PSM {psm}): {type(exc).__name__}"
+                    )
                     continue
-                words = re.findall(r"[\u0621-\u064a]+", line)
-                if 2 <= len(words) <= 5:
-                    candidate = " ".join(words)
-                    if len(candidate) >= 5:
-                        candidates.append(candidate)
-            if candidates:
-                results[field] = max(candidates, key=lambda s: (len(s.split()) in (3, 4), len(s)))
-        else:
-            candidates = [line for line in lines if len(line) >= 3 and len(re.findall(r"[\u0621-\u064a]", line)) >= 2]
-            candidate = _clean_text(" ".join(candidates[:5]))
-            candidate = re.sub(r'^([0-9]{1,4})?\s*["\'""`]+\s*', lambda m: ((m.group(1) or "") + " "), candidate).strip()
-            if len(candidate) >= 10 and len(re.findall(r"[\u0621-\u064a]", candidate)) >= 6:
-                results[field] = candidate
+
+                # Score individual lines first.
+                lines = [
+                    normalize_arabic_candidate(line)
+                    for line in raw.splitlines()
+                ]
+                lines = [line for line in lines if line]
+
+                for line in lines:
+                    words = arabic_words(line)
+                    if field == "full_name":
+                        if re.search(r"\d", line):
+                            continue
+                        candidate = " ".join(words)
+                        score = score_name(candidate)
+                    else:
+                        candidate = line
+                        score = score_address(candidate)
+
+                    if score > 0:
+                        candidates.append((score, candidate, variant_name, psm))
+
+                # Address text can wrap onto multiple lines. Join only lines
+                # from this one OCR run, preserving their observed order.
+                if field == "address" and len(lines) >= 2:
+                    joined = normalize_arabic_candidate(" ".join(lines[:4]))
+                    score = score_address(joined)
+                    if score > 0:
+                        candidates.append((score, joined, variant_name, psm))
+
+        if not candidates:
+            print(f"    [national_id] No reliable {field} crop candidate")
+            continue
+
+        # Prefer plausible field structure, then OCR confidence heuristics.
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        best_score, best_value, best_variant, best_psm = candidates[0]
+
+        # Do not silently accept a weak candidate.
+        minimum_score = 9 if field == "full_name" else 10
+        if best_score >= minimum_score:
+            results[field] = best_value
+            print(
+                f"    [national_id] {field} crop selected "
+                f"(score={best_score}, variant={best_variant}, PSM={best_psm})"
+            )
+
+        if SAVE_DEBUG_CROPS:
+            print(
+                f"    [national_id] {field} candidates: "
+                f"{[(round(s, 1), v[:80]) for s, v, _, _ in candidates[:5]]}"
+            )
+
     return results
+
 
 
 def _extract_via_tesseract(front_path: str, back_path: str) -> dict:
@@ -616,6 +724,7 @@ def extract(front_path: str, back_path: str) -> dict:
             current = data.get(field)
             if value and _is_missing(current):
                 data[field] = value
+                print(f"    [national_id] {field} recovered from crop OCR")
         print("    [national_id] Name/address crop refinement completed")
     except Exception as exc:
         print(f"    [national_id] Name/address refinement failed: {type(exc).__name__}: {exc}")
@@ -624,10 +733,14 @@ def extract(front_path: str, back_path: str) -> dict:
     try:
         back_texts = _ocr_back_variants(back_path)
         if _is_missing(data.get("id_expiry_date")):
-            expiry = _extract_expiry_date(back_texts)
-            if expiry:
-                data["id_expiry_date"] = expiry
-                print("    [national_id] Expiry date recovered by OCR")
+            print(
+            "    [national_id] Expiry date was not readable by local OCR; "
+            "skipping external vision fallback"
+            )
+            data["id_expiry_date"] = None
+            # if expiry:
+            #     data["id_expiry_date"] = expiry
+            #     print("    [national_id] Expiry date recovered by OCR")
         profession = _extract_profession(back_texts)
         current_profession = data.get("profession_on_id")
         if profession and (_is_missing(current_profession) or len(profession) > len(str(current_profession)) + 8):
