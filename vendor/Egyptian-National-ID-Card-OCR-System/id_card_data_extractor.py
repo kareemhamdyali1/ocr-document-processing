@@ -1,7 +1,8 @@
 """
 Egyptian National ID Card OCR Data Extraction Module
 """
-
+import re
+from datetime import date
 from PIL import Image
 import cv2
 import numpy as np
@@ -26,102 +27,280 @@ extracted_spouse_name = ''
 extracted_governorate = ''
 
 
+def _valid_egyptian_id(value):
+    digits = re.sub(r"\D", "", str(value))
+    if not re.fullmatch(r"[23]\d{13}", digits):
+        return False
+
+    try:
+        century = 1900 if digits[0] == "2" else 2000
+        year = century + int(digits[1:3])
+        month = int(digits[3:5])
+        day = int(digits[5:7])
+        dob = date(year, month, day)
+
+        valid_governorates = {
+            "01", "02", "03", "04", "11", "12", "13",
+            "14", "15", "16", "17", "18", "19", "21",
+            "22", "23", "24", "25", "26", "27", "28",
+            "29", "31", "32", "33", "34", "35", "88"
+        }
+
+        return dob <= date.today() and digits[7:9] in valid_governorates
+    except ValueError:
+        return False
+
+
+def _read_id_region(grayscale_image):
+    import cv2
+    import pytesseract
+
+    h, w = grayscale_image.shape[:2]
+
+    # Coordinates relative to standardized 1000x630 card
+    regions = [
+        (450, 475, 975, 545),
+        (400, 465, 990, 555),
+        (350, 455, 995, 565),
+    ]
+
+    translation = str.maketrans(
+        "٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹",
+        "01234567890123456789"
+    )
+
+    for region_index, (x1, y1, x2, y2) in enumerate(regions):
+        x1, x2 = int(x1 * w / 1000), int(x2 * w / 1000)
+        y1, y2 = int(y1 * h / 630), int(y2 * h / 630)
+
+        crop = grayscale_image[y1:y2, x1:x2]
+        if crop.size == 0:
+            continue
+
+        enlarged = cv2.resize(
+            crop, None, fx=3, fy=3,
+            interpolation=cv2.INTER_CUBIC
+        )
+
+        blurred = cv2.bilateralFilter(enlarged, 5, 35, 35)
+        otsu = cv2.threshold(
+            blurred, 0, 255,
+            cv2.THRESH_BINARY + cv2.THRESH_OTSU
+        )[1]
+
+        variants = [enlarged, blurred, otsu]
+
+        for variant_index, variant in enumerate(variants):
+            for lang in ("ara_number", "ara_combined", "ara", "eng"):
+                for psm in (7, 13):
+                    try:
+                        raw = pytesseract.image_to_string(
+                            variant,
+                            lang=lang,
+                            config=f"--oem 1 --psm {psm}"
+                        )
+
+                        normalized = raw.translate(translation)
+                        digits = re.sub(r"\D", "", normalized)
+
+                        # Never accept arbitrary long OCR output.
+                        if len(digits) == 14 and _valid_egyptian_id(digits):
+                            print(
+                                "[national_id] Valid candidate found "
+                                f"region={region_index} "
+                                f"variant={variant_index} "
+                                f"lang={lang} psm={psm}"
+                            )
+                            return digits
+
+                    except Exception as exc:
+                        print(
+                            "[national_id] OCR attempt failed: "
+                            f"{type(exc).__name__}"
+                        )
+
+    print("[national_id] No validated 14-digit ID found")
+    return ""
+
+
+
 def extract_front_side_data(front_image_path):
     import cv2 as _cv2
-
-    grayscale_image = _cv2.imread(front_image_path, _cv2.IMREAD_GRAYSCALE)
-    if grayscale_image is None:
-        raise ValueError(f"Could not load image from path: {front_image_path}")
-    print(f"    [DEBUG] Front image shape: {grayscale_image.shape}")
-
-    _, binary_image = _cv2.threshold(grayscale_image, 90, 255, _cv2.THRESH_BINARY)
 
     global extracted_photo, extracted_full_name, extracted_address
     global extracted_id_number, extracted_birth_date, extracted_governorate
 
+    grayscale_image = _cv2.imread(
+        front_image_path, _cv2.IMREAD_GRAYSCALE
+    )
+
+    if grayscale_image is None:
+        raise ValueError(
+            f"Could not load image from path: {front_image_path}"
+        )
+
+    h, w = grayscale_image.shape[:2]
+
+    print(
+        f"[national_id] Front image loaded: "
+        f"width={w}, height={h}"
+    )
+
+    # Reset front-side fields for each request
+    extracted_full_name = ""
+    extracted_address = ""
+    extracted_id_number = ""
+    extracted_birth_date = ""
+    extracted_governorate = ""
+
+    # Normalize card image to the repo's expected dimensions
+    if w != 1000 or h != 630:
+        grayscale_image = _cv2.resize(
+            grayscale_image,
+            (1000, 630),
+            interpolation=_cv2.INTER_CUBIC
+        )
+
+    # Original repo preprocessing
+    _, binary_image = _cv2.threshold(
+        grayscale_image,
+        90,
+        255,
+        _cv2.THRESH_BINARY
+    )
+
+    # Keep existing photo/name/address regions
     extracted_photo = grayscale_image[50:350, 50:275]
+
     name_region = binary_image[150:310, 400:1000]
     address_region = binary_image[300:450, 400:1000]
 
-    h, w = grayscale_image.shape[:2]
-    id_region_gray = grayscale_image[int(h*0.75):int(h*0.92), 0:w]
+    # Extract name and address independently
+    try:
+        extracted_full_name = image_to_string(
+            name_region,
+            lang="ara",
+            config="--oem 1 --psm 6"
+        ).strip()
 
-    # تكبير منطقة الرقم x3 لتحسين الـ OCR
-    id_region_gray = _cv2.resize(
-        id_region_gray, None, fx=3, fy=3,
-        interpolation=_cv2.INTER_CUBIC
-    )
+        print(
+            "[national_id] Name OCR completed:",
+            bool(extracted_full_name)
+        )
 
-    id_adaptive = _cv2.adaptiveThreshold(
-        id_region_gray, 255,
-        _cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        _cv2.THRESH_BINARY, 11, 2
-    )
-    _, id_otsu = _cv2.threshold(
-        id_region_gray, 0, 255,
-        _cv2.THRESH_BINARY + _cv2.THRESH_OTSU
-    )
-    print(f"    [DEBUG] ID region shape after resize: {id_region_gray.shape}")
+    except Exception as exc:
+        print(
+            "[national_id] Name OCR failed:",
+            type(exc).__name__
+        )
 
     try:
-        extracted_full_name = image_to_string(name_region, lang="ara")
-        extracted_address = image_to_string(address_region, lang="ara")
+        extracted_address = image_to_string(
+            address_region,
+            lang="ara",
+            config="--oem 1 --psm 6"
+        ).strip()
 
-        arabic_to_ascii = str.maketrans("٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹", "01234567890123456789")
+        print(
+            "[national_id] Address OCR completed:",
+            bool(extracted_address)
+        )
+
+    except Exception as exc:
+        print(
+            "[national_id] Address OCR failed:",
+            type(exc).__name__
+        )
+
+    # Read only the ID-number area using multiple OCR variants
+    try:
+        extracted_id_number = _read_id_region(
+            grayscale_image
+        )
+
+    except Exception as exc:
         extracted_id_number = ""
 
-        for region_name, region in [
-            ("gray",     id_region_gray),
-            ("adaptive", id_adaptive),
-            ("otsu",     id_otsu),
-        ]:
-            for lang, cfg in [
-                ("ara_number",   "--oem 1 --psm 7"),
-                ("ara_number",   "--oem 1 --psm 6"),
-                ("ara_combined", "--oem 1 --psm 7"),
-                ("ara_combined", "--oem 1 --psm 6"),
-                ("eng",          "--oem 1 --psm 7 -c tessedit_char_whitelist=0123456789"),
-                ("ara+eng",      "--oem 1 --psm 6"),
-            ]:
-                try:
-                    result = image_to_string(region, lang=lang, config=cfg).strip()
-                    digits_only = ''.join(
-                        c for c in result.translate(arabic_to_ascii) if c.isdigit()
-                    )
-                    print(f"    [DEBUG] {region_name}+{lang}: raw={repr(result[:60])} digits={digits_only}")
-                    if len(digits_only) >= 10:
-                        extracted_id_number = digits_only
-                        break
-                except Exception as e:
-                    print(f"    [DEBUG] {region_name}+{lang} failed: {e}")
-            if extracted_id_number:
-                break
+        print(
+            "[national_id] ID region OCR failed:",
+            type(exc).__name__
+        )
 
-        print(f"Extracted ID Number: {extracted_id_number}")
-
-    except Exception as ocr_error:
-        print(f"[Warning] OCR extraction failed: {ocr_error}")
-        return
-
-    if len(extracted_id_number) >= 7:
+    # Derive birth date and governorate only from validated ID
+    if extracted_id_number and _valid_egyptian_id(
+        extracted_id_number
+    ):
         try:
-            if extracted_id_number[0] == '2':
-                birth_year = '19' + extracted_id_number[1:3]
-            else:
-                birth_year = '20' + extracted_id_number[1:3]
-            birth_month = extracted_id_number[3:5]
-            birth_day = extracted_id_number[5:7]
-            extracted_birth_date = f"{birth_year}/{birth_month}/{birth_day}"
-        except (IndexError, ValueError) as date_error:
-            print(f"[Warning] Could not parse birth date from ID: {date_error}")
-            extracted_birth_date = "Unknown"
+            from datetime import date
 
-    try:
-        extracted_governorate = pob.placeOfBirth(extracted_id_number)
-    except Exception as gov_error:
-        print(f"[Warning] Could not determine governorate: {gov_error}")
-        extracted_governorate = "Unknown"
+            century = (
+                1900
+                if extracted_id_number[0] == "2"
+                else 2000
+            )
 
+            year = century + int(
+                extracted_id_number[1:3]
+            )
+            month = int(
+                extracted_id_number[3:5]
+            )
+            day = int(
+                extracted_id_number[5:7]
+            )
+
+            birth_date = date(year, month, day)
+
+            extracted_birth_date = birth_date.strftime(
+                "%Y/%m/%d"
+            )
+
+            try:
+                extracted_governorate = pob.placeOfBirth(
+                    extracted_id_number
+                )
+
+            except Exception as exc:
+                extracted_governorate = ""
+
+                print(
+                    "[national_id] Governorate decoding failed:",
+                    type(exc).__name__
+                )
+
+            print(
+                "[national_id] ID validated successfully"
+            )
+
+        except Exception as exc:
+            extracted_birth_date = ""
+            extracted_governorate = ""
+
+            print(
+                "[national_id] ID decoding failed:",
+                type(exc).__name__
+            )
+
+    else:
+        extracted_id_number = ""
+        extracted_birth_date = ""
+        extracted_governorate = ""
+
+        print(
+            "[national_id] ID not validated; "
+            "preserving name and address"
+        )
+
+    print(
+        "[national_id] Front extraction completed:",
+        {
+            "full_name": bool(extracted_full_name),
+            "address": bool(extracted_address),
+            "national_id": bool(extracted_id_number),
+            "date_of_birth": bool(extracted_birth_date),
+            "governorate": bool(extracted_governorate),
+        }
+    )
 
 def extract_and_validate_text_region(x1, y1, x2, y2, field_type, binary_image, full_text_context):
     crop_coordinates = (x1, y1, x2, y2)
