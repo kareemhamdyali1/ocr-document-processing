@@ -71,7 +71,7 @@ def extract_front_side_data(front_image_path):
     grayscale_image = cv2.imread(front_image_path, cv2.IMREAD_GRAYSCALE)
     if grayscale_image is None:
         raise ValueError(f"Could not load image from path: {front_image_path}")
-
+    print(f"    [DEBUG] Front image shape: {grayscale_image.shape}")
     # Apply binary threshold for better OCR accuracy
     ocr_threshold_value = 90
     _, binary_image = cv2.threshold(
@@ -97,7 +97,8 @@ def extract_front_side_data(front_image_path):
 
     # ID number region (right side, lower area)
     h, w = binary_image.shape[:2]
-    id_number_region = binary_image[int(h*0.62):int(h*0.80), int(w*0.0):int(w*1.0)]
+    id_number_region = binary_image[int(h*0.75):int(h*0.92), int(w*0.0):w]
+    print(f"    [DEBUG] ID region shape: {id_number_region.shape}")
 
     # Perform OCR on extracted regions
     try:
