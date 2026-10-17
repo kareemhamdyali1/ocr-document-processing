@@ -357,14 +357,23 @@ def _extract_via_repo(front_path: str, back_path: str) -> dict:
         "extracted_governorate", "extracted_job_title", "extracted_workplace", "extracted_gender",
         "extracted_religion", "extracted_marital_status", "extracted_spouse_name",
     )
-    output_stream = io.StringIO()
-    with contextlib.redirect_stdout(output_stream):
-        for field in module_fields:
-            setattr(mod, field, "")
-        scan_id_card(front_path, "front")
-        scan_id_card(back_path, "back")
-        mod.extract_front_side_data("temp_front.jpg")
-        mod.extract_back_side_data("temp_back.jpg")
+        output_stream = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(output_stream):
+            for field in module_fields:
+                setattr(mod, field, "")
+            scan_id_card(front_path, "front")
+            scan_id_card(back_path, "back")
+            mod.extract_front_side_data("temp_front.jpg")
+            mod.extract_back_side_data("temp_back.jpg")
+    except Exception as repo_inner_exc:
+        
+        print(f"    [DEBUG] Repo inner error: {type(repo_inner_exc).__name__}: {repo_inner_exc}")
+        print(f"    [DEBUG] Repo stdout so far: {output_stream.getvalue()[:300]}")
+        raise
+
+    print(f"    [DEBUG] Repo stdout: {output_stream.getvalue()[:500]}")
+    print(f"    [DEBUG] Extracted ID: {repr(getattr(mod, 'extracted_id_number', 'NOT FOUND'))}")
     repo_output = output_stream.getvalue()
 
     data = {
