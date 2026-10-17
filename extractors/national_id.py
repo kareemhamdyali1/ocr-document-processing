@@ -388,8 +388,17 @@ def _extract_via_repo(front_path: str, back_path: str) -> dict:
         "id_expiry_date": None,
     }
     if not _is_missing(data.get("national_id")):
-        repo_nid = _find_national_id(str(data["national_id"]))
-        data["national_id"] = repo_nid or data["national_id"]
+        raw = re.sub(r"\D", "", _normalize_digits(str(data["national_id"])))
+        
+        found_nid = None
+        for i in range(len(raw) - 13):
+            candidate = raw[i:i+14]
+            decoded = _parse_id_number(candidate)
+            if decoded.get("date_of_birth"):
+                found_nid = candidate
+                print(f"    [DEBUG] Found valid NID at position {i}: {candidate}")
+                break
+        data["national_id"] = found_nid or _find_national_id(str(data["national_id"]))
 
     if _is_missing(data.get("national_id")):
         data["national_id"] = _find_national_id(repo_output)
