@@ -366,6 +366,10 @@ def _extract_via_repo(front_path: str, back_path: str) -> dict:
             scan_id_card(back_path, "back")
             mod.extract_front_side_data("temp_front.jpg")
             mod.extract_back_side_data("temp_back.jpg")
+            import base64 as _b64
+            with open("temp_front.jpg", "rb") as f:
+                _encoded = _b64.b64encode(f.read()).decode()
+            print(f"    [DEBUG] temp_front.jpg base64: {_encoded[:200]}")
     except Exception as repo_inner_exc:
         
         print(f"    [DEBUG] Repo inner error: {type(repo_inner_exc).__name__}: {repo_inner_exc}")
