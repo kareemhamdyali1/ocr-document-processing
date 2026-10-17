@@ -46,19 +46,16 @@ extracted_religion = ''
 extracted_marital_status = ''
 extracted_spouse_name = ''
 extracted_governorate = ''
+
 def extract_front_side_data(front_image_path):
-    grayscale_image = cv2.imread(front_image_path, cv2.IMREAD_GRAYSCALE)
+    import cv2 as _cv2
+
+    grayscale_image = _cv2.imread(front_image_path, _cv2.IMREAD_GRAYSCALE)
     if grayscale_image is None:
         raise ValueError(f"Could not load image from path: {front_image_path}")
     print(f"    [DEBUG] Front image shape: {grayscale_image.shape}")
 
-    ocr_threshold_value = 90
-    _, binary_image = cv2.threshold(
-        grayscale_image,
-        ocr_threshold_value,
-        255,
-        cv2.THRESH_BINARY
-    )
+    _, binary_image = _cv2.threshold(grayscale_image, 90, 255, _cv2.THRESH_BINARY)
 
     global extracted_photo, extracted_full_name, extracted_address
     global extracted_id_number, extracted_birth_date, extracted_governorate
@@ -67,34 +64,41 @@ def extract_front_side_data(front_image_path):
     name_region = binary_image[150:310, 400:1000]
     address_region = binary_image[300:450, 400:1000]
 
-    h, w = binary_image.shape[:2]
-    id_number_region = binary_image[int(h*0.75):int(h*0.92), 0:w]
-    print(f"    [DEBUG] ID region shape: {id_number_region.shape}")
+    h, w = grayscale_image.shape[:2]
+    id_region_gray = grayscale_image[int(h*0.75):int(h*0.92), 0:w]
+    id_adaptive = _cv2.adaptiveThreshold(
+        id_region_gray, 255,
+        _cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        _cv2.THRESH_BINARY, 11, 2
+    )
+    _, id_otsu = _cv2.threshold(id_region_gray, 0, 255, _cv2.THRESH_BINARY + _cv2.THRESH_OTSU)
+    print(f"    [DEBUG] ID region shape: {id_region_gray.shape}")
 
     try:
         extracted_full_name = image_to_string(name_region, lang="ara")
         extracted_address = image_to_string(address_region, lang="ara")
 
-        # جرب كذا طريقة لقراءة الرقم
-        raw_id_number = ""
+        arabic_to_ascii = str.maketrans("٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹", "01234567890123456789")
         extracted_id_number = ""
-        for lang, cfg in [
-            ("ara_number", "--oem 1 --psm 7"),
-            ("ara_number", "--oem 1 --psm 6"),
-            ("ara+eng",    "--oem 1 --psm 7 -c tessedit_char_whitelist=0123456789٠١٢٣٤٥٦٧٨٩"),
-            ("eng",        "--oem 1 --psm 7 -c tessedit_char_whitelist=0123456789"),
-        ]:
-            try:
-                result = image_to_string(id_number_region, lang=lang, config=cfg).strip()
-                arabic_to_ascii = str.maketrans("٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹", "01234567890123456789")
-                digits_only = ''.join(c for c in result.translate(arabic_to_ascii) if c.isdigit())
-                print(f"    [DEBUG] lang={lang}: raw={repr(result[:60])} digits={digits_only}")
-                if len(digits_only) >= 10:
-                    raw_id_number = result
-                    extracted_id_number = digits_only
-                    break
-            except Exception as e:
-                print(f"    [DEBUG] lang={lang} failed: {e}")
+
+        for region_name, region in [("gray", id_region_gray), ("adaptive", id_adaptive), ("otsu", id_otsu)]:
+            for lang, cfg in [
+                ("ara_number", "--oem 1 --psm 7"),
+                ("ara_number", "--oem 1 --psm 6"),
+                ("eng",        "--oem 1 --psm 7 -c tessedit_char_whitelist=0123456789"),
+                ("ara+eng",    "--oem 1 --psm 6"),
+            ]:
+                try:
+                    result = image_to_string(region, lang=lang, config=cfg).strip()
+                    digits_only = ''.join(c for c in result.translate(arabic_to_ascii) if c.isdigit())
+                    print(f"    [DEBUG] {region_name}+{lang}: raw={repr(result[:60])} digits={digits_only}")
+                    if len(digits_only) >= 10:
+                        extracted_id_number = digits_only
+                        break
+                except Exception as e:
+                    print(f"    [DEBUG] {region_name}+{lang} failed: {e}")
+            if extracted_id_number:
+                break
 
         print(f"Extracted ID Number: {extracted_id_number}")
 
@@ -120,7 +124,6 @@ def extract_front_side_data(front_image_path):
     except Exception as gov_error:
         print(f"[Warning] Could not determine governorate: {gov_error}")
         extracted_governorate = "Unknown"
-
 
 def extract_and_validate_text_region(x1, y1, x2, y2, field_type, binary_image, full_text_context):
     """
