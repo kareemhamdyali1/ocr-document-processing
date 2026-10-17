@@ -338,6 +338,9 @@ def _extract_expiry_with_qwen(back_path: str) -> str | None:
 
 def _extract_via_repo(front_path: str, back_path: str) -> dict:
     repo_path = Path(NATIONAL_ID_OCR_PATH)
+
+    os.chdir(str(repo_path))
+    
     if not NATIONAL_ID_OCR_PATH or not repo_path.is_dir():
         raise FileNotFoundError(f"Repo path not found: {NATIONAL_ID_OCR_PATH}")
     repo_str = str(repo_path.resolve())
