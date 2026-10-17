@@ -717,17 +717,70 @@ def extract(front_path: str, back_path: str) -> dict:
     for key in EXPECTED_KEYS:
         data.setdefault(key, None)
 
-    try:
-        refined = _extract_name_address_from_image(front_path)
-        for field in ("full_name", "address"):
-            value = refined.get(field)
-            current = data.get(field)
-            if value and _is_missing(current):
-                data[field] = value
-                print(f"    [national_id] {field} recovered from crop OCR")
-        print("    [national_id] Name/address crop refinement completed")
-    except Exception as exc:
-        print(f"    [national_id] Name/address refinement failed: {type(exc).__name__}: {exc}")
+        try:
+            refined = _extract_name_address_from_image(front_path)
+    
+            for field in ("full_name", "address"):
+                value = refined.get(field)
+                if not isinstance(value, str):
+                    continue
+    
+                value = _clean_text(value)
+                arabic_words = re.findall(r"[\u0621-\u064a]+", value)
+                current = str(data.get(field) or "").strip()
+    
+                if field == "full_name":
+                    # الاسم لازم يكون من 2 إلى 5 كلمات عربية،
+                    # من غير أرقام أو حروف لاتينية.
+                    valid = (
+                        2 <= len(arabic_words) <= 5
+                        and len(value) >= 5
+                        and not re.search(r"\d|[A-Za-z]", value)
+                    )
+                else:
+                    # العنوان لازم يحتوي على كلمات عربية كافية.
+                    valid = (
+                        len(arabic_words) >= 3
+                        and len(value) >= 10
+                        and not re.search(r"[A-Za-z]", value)
+                    )
+    
+                if not valid:
+                    print(
+                        f"    [national_id] Rejected weak crop candidate "
+                        f"for {field}"
+                    )
+                    continue
+    
+                current_has_noise = bool(
+                    re.search(r"\d|[A-Za-z\"'`{}<>|]", current)
+                )
+                current_arabic_words = re.findall(
+                    r"[\u0621-\u064a]+", current
+                )
+    
+                # استبدل القيمة القديمة لو فيها ضوضاء واضحة،
+                # أو كانت غير صالحة بنيويًا.
+                current_valid = (
+                    2 <= len(current_arabic_words) <= 5
+                    if field == "full_name"
+                    else len(current_arabic_words) >= 3
+                )
+    
+                if not current or current_has_noise or not current_valid:
+                    data[field] = value
+                    print(
+                        f"    [national_id] {field} replaced with "
+                        "validated crop OCR"
+                    )
+    
+            print("    [national_id] Name/address crop refinement completed")
+
+        except Exception as exc:
+            print(
+                f"    [national_id] Name/address refinement failed: "
+                f"{type(exc).__name__}: {exc}"
+            )
 
     back_texts = []
     try:
@@ -750,13 +803,11 @@ def extract(front_path: str, back_path: str) -> dict:
         print(f"    [national_id] Back-side recovery failed: {type(exc).__name__}: {exc}")
 
     if _is_missing(data.get("id_expiry_date")):
-        expiry = _extract_expiry_with_qwen(back_path)
-        if expiry:
-            data["id_expiry_date"] = expiry
-            print("    [national_id] Expiry date recovered by Qwen")
-        else:
-            data["id_expiry_date"] = None
-            print("    [national_id] Expiry date remains unreadable")
+        data["id_expiry_date"] = None
+        print(
+            "    [national_id] Expiry date unavailable from local OCR; "
+            "external vision fallback skipped"
+        )
 
     placeholders = {"arabic full name", "full name", "yyyy-mm-dd", "governorate in arabic", "full address", "profession text", "name", "address", "profession", "marital status", "unknown", "غير محدد"}
     def missing(value):
