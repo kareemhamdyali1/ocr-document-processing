@@ -357,7 +357,7 @@ def _extract_via_repo(front_path: str, back_path: str) -> dict:
         "extracted_governorate", "extracted_job_title", "extracted_workplace", "extracted_gender",
         "extracted_religion", "extracted_marital_status", "extracted_spouse_name",
     )
-        output_stream = io.StringIO()
+    output_stream = io.StringIO()
     try:
         with contextlib.redirect_stdout(output_stream):
             for field in module_fields:
