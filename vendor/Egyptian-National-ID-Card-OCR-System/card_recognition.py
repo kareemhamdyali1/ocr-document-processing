@@ -347,62 +347,23 @@ def find_best_card_contour(edge_detected_image, processed_image, full_resolution
 
 
 def scan_id_card(input_image_path, card_side_type):
-    """
-    Main function to scan and process an Egyptian national ID card.
+    original_image = cv2.imread(input_image_path)
+    if original_image is None:
+        raise ValueError(f"Could not load image from path: {input_image_path}")
 
-    This function performs the complete scanning workflow:
-    1. Load and resize the input image
-    2. Apply edge detection to find card boundaries
-    3. Detect the best quadrilateral contour representing the card
-    4. Apply perspective transformation to get a top-down view
-    5. Save the processed card image
-
-    Args:
-        input_image_path (str): Path to the input image file
-        card_side_type (str): Either "front" or "back" to specify card side
-
-    Returns:
-        numpy.ndarray: Processed card image (1000x630 pixels)
-
-    Raises:
-        ValueError: If image cannot be loaded
-        RuntimeError: If no suitable card contour is found
-    """
-    # Step 1: Load and resize image for processing
-    full_resolution_image, processing_sized_image, coordinate_scale_ratio = load_and_resize_image(
-        input_image_path,
-        PROCESSING_HEIGHT
-    )
-
-    # Step 2: Preprocess for edge detection
-    grayscale_image, edge_detected_image = preprocess_for_edge_detection(processing_sized_image)
-
-    # Step 3: Find the best card contour using OCR validation
-    optimal_card_contour = find_best_card_contour(
-        edge_detected_image,
-        processing_sized_image,
-        full_resolution_image,
-        coordinate_scale_ratio
-    )
-
-    # Step 4: Apply perspective transformation
-    full_resolution_corner_points = optimal_card_contour.reshape(4, 2) * coordinate_scale_ratio
-    perspective_corrected_card = apply_perspective_correction(full_resolution_image, full_resolution_corner_points)
-
-    # Step 5: Resize to standard dimensions and save
+    # resize مباشرة بدون perspective correction
     final_processed_card = cv2.resize(
-        perspective_corrected_card,
+        original_image,
         FINAL_CARD_SIZE,
         interpolation=cv2.INTER_LINEAR
     )
 
-    # Save processed image based on card side
     if card_side_type == "front":
         output_file_path = "temp_front.jpg"
     elif card_side_type == "back":
         output_file_path = "temp_back.jpg"
     else:
-        raise ValueError(f"Invalid card_side_type: {card_side_type}. Must be 'front' or 'back'")
+        raise ValueError(f"Invalid card_side_type: {card_side_type}")
 
     cv2.imwrite(output_file_path, final_processed_card)
     print(f"[Success] Processed {card_side_type} side saved as {output_file_path}")
