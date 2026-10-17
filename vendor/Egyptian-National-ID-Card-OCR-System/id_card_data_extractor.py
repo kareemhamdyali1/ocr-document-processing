@@ -47,32 +47,11 @@ extracted_marital_status = ''
 extracted_spouse_name = ''
 extracted_governorate = ''
 def extract_front_side_data(front_image_path):
-    """
-    Extract personal information from the front side of Egyptian national ID card.
-
-    This function processes the front side of an ID card to extract:
-    - Personal photo
-    - Full name in Arabic
-    - Address in Arabic
-    - National ID number
-    - Birth date (calculated from ID number)
-    - Governorate of birth
-
-    Args:
-        front_image_path (str): Path to the front side image of the ID card
-
-    Returns:
-        None: Updates global variables with extracted data
-
-    Raises:
-        ValueError: If image cannot be loaded or ID number is invalid
-    """
-    # Load and preprocess the front side image
     grayscale_image = cv2.imread(front_image_path, cv2.IMREAD_GRAYSCALE)
     if grayscale_image is None:
         raise ValueError(f"Could not load image from path: {front_image_path}")
     print(f"    [DEBUG] Front image shape: {grayscale_image.shape}")
-    # Apply binary threshold for better OCR accuracy
+
     ocr_threshold_value = 90
     _, binary_image = cv2.threshold(
         grayscale_image,
@@ -81,65 +60,61 @@ def extract_front_side_data(front_image_path):
         cv2.THRESH_BINARY
     )
 
-    # Access global variables for storing extracted data
     global extracted_photo, extracted_full_name, extracted_address
     global extracted_id_number, extracted_birth_date, extracted_governorate
 
-    # Extract different regions of the ID card
-    # Photo region (top-left corner)
     extracted_photo = grayscale_image[50:350, 50:275]
-
-    # Name region (right side, upper area)
     name_region = binary_image[150:310, 400:1000]
-
-    # Address region (right side, middle area)
     address_region = binary_image[300:450, 400:1000]
 
-    # ID number region (right side, lower area)
     h, w = binary_image.shape[:2]
-    id_number_region = binary_image[int(h*0.75):int(h*0.92), int(w*0.0):w]
+    id_number_region = binary_image[int(h*0.75):int(h*0.92), 0:w]
     print(f"    [DEBUG] ID region shape: {id_number_region.shape}")
 
-    # Perform OCR on extracted regions
     try:
-        # Extract Arabic text for name and address
         extracted_full_name = image_to_string(name_region, lang="ara")
         extracted_address = image_to_string(address_region, lang="ara")
 
-        # Extract ID number using Arabic number recognition
-        raw_id_number = image_to_string(id_number_region, lang="ara_number+ara+eng", 
-                                 config="--oem 1 --psm 7")
-        extracted_id_number = ''.join(raw_id_number.split())  # Remove whitespace
-        print(f"Extracted ID Number: {extracted_id_number}")
-        print(f"    [DEBUG] Raw ID OCR: {repr(raw_id_number[:100])}")
-        print(f"    [DEBUG] Image shape: {binary_image.shape}")
+        # جرب كذا طريقة لقراءة الرقم
+        raw_id_number = ""
+        extracted_id_number = ""
+        for lang, cfg in [
+            ("ara_number", "--oem 1 --psm 7"),
+            ("ara_number", "--oem 1 --psm 6"),
+            ("ara+eng",    "--oem 1 --psm 7 -c tessedit_char_whitelist=0123456789٠١٢٣٤٥٦٧٨٩"),
+            ("eng",        "--oem 1 --psm 7 -c tessedit_char_whitelist=0123456789"),
+        ]:
+            try:
+                result = image_to_string(id_number_region, lang=lang, config=cfg).strip()
+                arabic_to_ascii = str.maketrans("٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹", "01234567890123456789")
+                digits_only = ''.join(c for c in result.translate(arabic_to_ascii) if c.isdigit())
+                print(f"    [DEBUG] lang={lang}: raw={repr(result[:60])} digits={digits_only}")
+                if len(digits_only) >= 10:
+                    raw_id_number = result
+                    extracted_id_number = digits_only
+                    break
+            except Exception as e:
+                print(f"    [DEBUG] lang={lang} failed: {e}")
 
-        
+        print(f"Extracted ID Number: {extracted_id_number}")
 
     except Exception as ocr_error:
         print(f"[Warning] OCR extraction failed: {ocr_error}")
         return
 
-    # Calculate birth date from ID number
     if len(extracted_id_number) >= 7:
         try:
-            # Determine century from first digit (2=1900s, 3=2000s)
             if extracted_id_number[0] == '2':
                 birth_year = '19' + extracted_id_number[1:3]
             else:
                 birth_year = '20' + extracted_id_number[1:3]
-
             birth_month = extracted_id_number[3:5]
             birth_day = extracted_id_number[5:7]
-
-            # Format as YYYY/MM/DD
             extracted_birth_date = f"{birth_year}/{birth_month}/{birth_day}"
-
         except (IndexError, ValueError) as date_error:
             print(f"[Warning] Could not parse birth date from ID: {date_error}")
             extracted_birth_date = "Unknown"
 
-    # Extract governorate information from ID number
     try:
         extracted_governorate = pob.placeOfBirth(extracted_id_number)
     except Exception as gov_error:
