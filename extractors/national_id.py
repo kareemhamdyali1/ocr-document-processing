@@ -393,15 +393,27 @@ def _extract_via_repo(front_path: str, back_path: str) -> dict:
     }
     if not _is_missing(data.get("national_id")):
         raw = re.sub(r"\D", "", _normalize_digits(str(data["national_id"])))
-        
         found_nid = None
         for i in range(len(raw) - 13):
             candidate = raw[i:i+14]
+            
+            if candidate[0] not in ('2', '3'):
+                continue
             decoded = _parse_id_number(candidate)
-            if decoded.get("date_of_birth"):
-                found_nid = candidate
-                print(f"    [DEBUG] Found valid NID at position {i}: {candidate}")
-                break
+            if not decoded.get("date_of_birth"):
+                continue
+            
+            dob = decoded["date_of_birth"]
+            age = decoded.get("age_years", 0)
+            if not (18 <= age <= 80):
+                continue
+          
+            gov_code = candidate[7:9]
+            if gov_code not in GOVERNORATE_MAP:
+                continue
+            found_nid = candidate
+            print(f"    [DEBUG] Found valid NID at position {i}: {candidate} age={age}")
+            break
         data["national_id"] = found_nid or _find_national_id(str(data["national_id"]))
 
     if _is_missing(data.get("national_id")):
