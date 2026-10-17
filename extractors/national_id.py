@@ -377,7 +377,11 @@ def _extract_via_repo(front_path: str, back_path: str) -> dict:
         raise
 
     print(f"    [DEBUG] Repo stdout: {output_stream.getvalue()[:500]}")
-    print(f"    [DEBUG] Extracted ID: {repr(getattr(mod, 'extracted_id_number', 'NOT FOUND'))}")
+    raw_id = str(getattr(mod, "extracted_id_number", "") or "")
+    print(
+        "[national_id] Repo ID status:",
+        "valid_length" if len(raw_id) == 14 else "missing_or_invalid"
+    )
     repo_output = output_stream.getvalue()
 
     data = {
@@ -417,7 +421,13 @@ def _extract_via_repo(front_path: str, back_path: str) -> dict:
         data["national_id"] = found_nid or _find_national_id(str(data["national_id"]))
 
     if _is_missing(data.get("national_id")):
-        data["national_id"] = _find_national_id(repo_output)
+        data["national_id"] = None
+        data["date_of_birth"] = None
+        data["governorate"] = None
+        data["gender"] = None
+        print("[national_id] ID unreadable; preserving other repo fields")
+    
+    return data
 
     for key, value in list(data.items()):
         if isinstance(value, str):
@@ -652,12 +662,13 @@ def extract(front_path: str, back_path: str) -> dict:
     nid_value = next((data.get(k) for k in ("national_id", "id_number", "ID Number", "id", "National ID", "national_id_number") if not _is_missing(data.get(k))), None)
     if nid_value is not None:
         nid = re.sub(r"\D", "", _normalize_digits(nid_value))
-        if re.fullmatch(r"[23]\d{13}", nid):
+        decoded = _parse_id_number(nid)
+        if re.fullmatch(r"[23]\d{13}", nid) and decoded.get("date_of_birth") and decoded.get("governorate"):
             data["national_id"] = nid
             decoded = _parse_id_number(nid)
             data.update(decoded)
         else:
-            data["national_id"] = nid or None
+            data["national_id"] = None
             print("    [national_id] Warning: extracted ID does not match the expected 14-digit format")
 
     for field in ("date_of_birth", "id_expiry_date"):
