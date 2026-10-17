@@ -343,6 +343,8 @@ def _extract_via_repo(front_path: str, back_path: str) -> dict:
     
     if not NATIONAL_ID_OCR_PATH or not repo_path.is_dir():
         raise FileNotFoundError(f"Repo path not found: {NATIONAL_ID_OCR_PATH}")
+    print(f"    [DEBUG] CWD: {os.getcwd()}")
+    print(f"    [DEBUG] Files here: {os.listdir('.')}")
     repo_str = str(repo_path.resolve())
     if repo_str not in sys.path:
         sys.path.insert(0, repo_str)
