@@ -41,7 +41,11 @@ KNOWN_BANKS = [
 def _to_float(s: str) -> float | None:
     s = s.replace(",", "").replace("ØŒ", "").replace(" ", "")
     # Handle Arabic-Indic digits
-    ar_digits = str.maketrans("Ù Ù¡Ù¢Ù£Ù¤Ù¥Ù¦Ù§Ù¨Ù©", "0123456789")
+    ar_digits = str.maketrans(
+    "\u0660\u0661\u0662\u0663\u0664\u0665\u0666\u0667\u0668\u0669"
+    "\u06f0\u06f1\u06f2\u06f3\u06f4\u06f5\u06f6\u06f7\u06f8\u06f9",
+    "01234567890123456789",
+    )
     s = s.translate(ar_digits)
     try:
         return float(s)
