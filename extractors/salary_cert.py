@@ -9,7 +9,7 @@ import re
 import json
 from datetime import date, datetime
 from PIL import Image
-
+from consistency import extract_identity_hints
 from utils.pdf_to_images import load_document
 from utils.ocr import ocr_pages
 
@@ -262,5 +262,11 @@ def extract(path: str, ollama_model: str = "qwen2.5:7b") -> dict:
             print(f"    [salary_cert] Ollama unavailable ({e}) — using regex result as-is")
     else:
         print("    [salary_cert] ✓ Regex extraction complete")
+
+
+
+    result["_consistency_identity"] = extract_identity_hints(
+        text, "salary_certificate"
+    )
 
     return result

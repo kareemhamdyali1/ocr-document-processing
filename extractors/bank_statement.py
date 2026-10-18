@@ -1,4 +1,4 @@
-"""
+﻿"""
 Bank Statement extractor.
 
 Primary:  Tesseract OCR + transaction table parsing + computed metrics
@@ -9,7 +9,7 @@ import re
 import json
 import statistics
 from PIL import Image
-
+from consistency import extract_identity_hints
 from utils.pdf_to_images import load_document
 from utils.ocr import ocr_pages
 
@@ -30,18 +30,18 @@ SCHEMA = {
 
 # Known Egyptian banks
 KNOWN_BANKS = [
-    "Mashreq", "CIB", "NBE", "البنك الأهلي", "QNB", "HSBC", "Banque Misr",
-    "بنك مصر", "Arab Bank", "Faisal", "Alex Bank", "ADIB", "Emirates NBD",
-    "Banque du Caire", "بنك القاهرة", "ABK", "Audi", "Societe Generale",
+    "Mashreq", "CIB", "NBE", "Ø§Ù„Ø¨Ù†Ùƒ Ø§Ù„Ø£Ù‡Ù„ÙŠ", "QNB", "HSBC", "Banque Misr",
+    "Ø¨Ù†Ùƒ Ù…ØµØ±", "Arab Bank", "Faisal", "Alex Bank", "ADIB", "Emirates NBD",
+    "Banque du Caire", "Ø¨Ù†Ùƒ Ø§Ù„Ù‚Ø§Ù‡Ø±Ø©", "ABK", "Audi", "Societe Generale",
 ]
 
 
-# ── money parsing ─────────────────────────────────────────────────────────────
+# â”€â”€ money parsing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _to_float(s: str) -> float | None:
-    s = s.replace(",", "").replace("،", "").replace(" ", "")
+    s = s.replace(",", "").replace("ØŒ", "").replace(" ", "")
     # Handle Arabic-Indic digits
-    ar_digits = str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789")
+    ar_digits = str.maketrans("Ù Ù¡Ù¢Ù£Ù¤Ù¥Ù¦Ù§Ù¨Ù©", "0123456789")
     s = s.translate(ar_digits)
     try:
         return float(s)
@@ -51,7 +51,7 @@ def _to_float(s: str) -> float | None:
 
 def _extract_all_amounts(text: str) -> list[float]:
     """Pull every number that looks like a balance/amount (>= 10)."""
-    raw = re.findall(r"\b[\d,،٠-٩]{2,}(?:\.\d{1,2})?\b", text)
+    raw = re.findall(r"\b[\d,ØŒÙ -Ù©]{2,}(?:\.\d{1,2})?\b", text)
     amounts = []
     for r in raw:
         v = _to_float(r)
@@ -74,7 +74,7 @@ def _extract_balances(text: str) -> list[float]:
     return balances
 
 
-# ── regex extraction ──────────────────────────────────────────────────────────
+# â”€â”€ regex extraction â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _extract_via_regex(text: str) -> dict:
     result = dict(SCHEMA)
@@ -87,7 +87,7 @@ def _extract_via_regex(text: str) -> dict:
 
     # Account number
     for pattern in [
-        r"(?:رقم الحساب|Account(?:\s+No\.?)?|Acc(?:ount)?\.?\s*No\.?)[:\s]*([\d\-]{8,20})",
+        r"(?:Ø±Ù‚Ù… Ø§Ù„Ø­Ø³Ø§Ø¨|Account(?:\s+No\.?)?|Acc(?:ount)?\.?\s*No\.?)[:\s]*([\d\-]{8,20})",
         r"\b(01\d{9,14})\b",          # Mashreq-style
         r"\b(20\d{10,14})\b",         # Banque Misr style
         r"\b(\d{12,16})\b",           # generic long account number
@@ -99,17 +99,17 @@ def _extract_via_regex(text: str) -> dict:
 
     # Overdraft / negative balance mentions
     overdraft_count = len(re.findall(
-        r"(?:سحب على المكشوف|overdraft|مديون|DR\b)", text, re.IGNORECASE
+        r"(?:Ø³Ø­Ø¨ Ø¹Ù„Ù‰ Ø§Ù„Ù…ÙƒØ´ÙˆÙ|overdraft|Ù…Ø¯ÙŠÙˆÙ†|DR\b)", text, re.IGNORECASE
     ))
     result["overdraft_frequency"] = overdraft_count
 
     # Returned cheques
     cheque_count = len(re.findall(
-        r"(?:شيك مرتجع|returned cheque|عدم الصرف)", text, re.IGNORECASE
+        r"(?:Ø´ÙŠÙƒ Ù…Ø±ØªØ¬Ø¹|returned cheque|Ø¹Ø¯Ù… Ø§Ù„ØµØ±Ù)", text, re.IGNORECASE
     ))
     result["returned_cheques_count"] = cheque_count
 
-    # Statement period — look for explicit label first
+    # Statement period â€” look for explicit label first
     m = re.search(
         r"(?:statement period|from)[:\s]+(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})"
         r".{1,20}(?:to|till|until)[:\s]+(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})",
@@ -152,10 +152,10 @@ def _extract_via_regex(text: str) -> dict:
         result["balance_volatility_std"] = round(statistics.stdev(balances), 2)
 
     # Income regularity score: look for credit amounts and compute CV
-    # Credit lines typically say "إيداع" / "credit" / "CR"
+    # Credit lines typically say "Ø¥ÙŠØ¯Ø§Ø¹" / "credit" / "CR"
     credit_amounts = []
     for line in text.splitlines():
-        if re.search(r"(?:إيداع|credit|CR\b|مرتب|راتب)", line, re.IGNORECASE):
+        if re.search(r"(?:Ø¥ÙŠØ¯Ø§Ø¹|credit|CR\b|Ù…Ø±ØªØ¨|Ø±Ø§ØªØ¨)", line, re.IGNORECASE):
             nums = _extract_all_amounts(line)
             # Exclude account-number-sized values (> 100,000) and tiny noise (< 10)
             nums = [n for n in nums if 10 <= n <= 100000]
@@ -175,7 +175,7 @@ def _extract_via_regex(text: str) -> dict:
     return result
 
 
-# ── Ollama fallback ───────────────────────────────────────────────────────────
+# â”€â”€ Ollama fallback â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _extract_via_ollama(text: str, model: str) -> dict:
     from utils.ollama_client import ollama_extract
@@ -201,20 +201,20 @@ Return ONLY the JSON object."""
     return ollama_extract(prompt, model=model)
 
 
-# ── public entry point ────────────────────────────────────────────────────────
+# â”€â”€ public entry point â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def extract(path: str, ollama_model: str = "qwen2.5:7b") -> dict:
     pages = load_document(path)
     text  = ocr_pages(pages, lang="ara+eng")
 
-    print("    [bank_statement] Running Tesseract regex extraction…")
+    print("    [bank_statement] Running Tesseract regex extractionâ€¦")
     result = _extract_via_regex(text)
 
     missing = [k for k in ("bank_name", "avg_monthly_balance", "income_regularity_score")
                if result.get(k) is None]
 
     if missing:
-        print(f"    [bank_statement] Regex missed: {missing} — trying Ollama…")
+        print(f"    [bank_statement] Regex missed: {missing} â€” trying Ollamaâ€¦")
         try:
             from utils.ollama_client import is_ollama_running
             if not is_ollama_running():
@@ -240,10 +240,17 @@ def extract(path: str, ollama_model: str = "qwen2.5:7b") -> dict:
                             result[k] = v
                     else:
                         result[k] = v
-            print("    [bank_statement] ✓ Ollama filled gaps")
+            print("    [bank_statement] âœ“ Ollama filled gaps")
         except Exception as e:
-            print(f"    [bank_statement] Ollama unavailable ({e}) — using regex result as-is")
+            print(f"    [bank_statement] Ollama unavailable ({e}) â€” using regex result as-is")
     else:
-        print("    [bank_statement] ✓ Regex extraction complete")
+        print("    [bank_statement] âœ“ Regex extraction complete")
+
+
+
+    result["_consistency_identity"] = extract_identity_hints(
+        text, "bank_statement"
+    )
+
 
     return result

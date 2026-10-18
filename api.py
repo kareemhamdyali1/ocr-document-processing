@@ -14,7 +14,8 @@ from fastapi.responses import FileResponse
 
 from main import _run_extractor, assemble
 from confidence import apply_validation_scores
-
+# from utils.consistency import build_consistency_checks
+from consistency import build_consistency_checks
 from extractors.national_id import extract as extract_nid
 from extractors.salary_cert import extract as extract_sal
 from extractors.bank_statement import extract as extract_bank
@@ -216,7 +217,13 @@ def process(
 
         result = assemble(nid, sal, bank, isc)
 
-        return apply_validation_scores(result)
+        result = apply_validation_scores(result)
+        result["consistency_checks"] = build_consistency_checks(result, {
+            "bank_statement": bank,
+            "salary_certificate": sal,
+            "iscore_report": isc,
+        })
+        return result
 
 
 # =========================================================

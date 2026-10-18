@@ -5,7 +5,7 @@ from datetime import date
 from pathlib import Path
 from utils.pdf_to_images import load_document
 from utils.ocr import ocr_pages
-
+from consistency import extract_identity_hints
 SCHEMA = {
     'credit_score': None, 'score_tier': '300 - 850', 'score_date': None,
     'total_active_loans_limit': None, 'total_outstanding_balance': None,
@@ -190,4 +190,10 @@ def extract(path: str, ollama_model: str = "qwen2.5vl:3b") -> dict:
     # output = Path('iscore_result.json')
     # output.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')
     # print(f'    [iscore] JSON saved to: {output.resolve()}')
+
+    # iscore.py
+    result["_consistency_identity"] = extract_identity_hints(
+        text, "iscore_report"
+    )
+
     return result
