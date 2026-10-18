@@ -660,6 +660,12 @@ def assemble(nid, sal, bank, isc):
         },
     }
 
+    for doc in result.get("documents", []):
+        value = doc.get("is_tampered_suspected")
+
+        if not isinstance(value, bool):
+            doc["is_tampered_suspected"] = False
+
     return result
 
 
